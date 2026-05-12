@@ -4,26 +4,30 @@
 
 import { filterStopwords } from './stopwords';
 
-// nodejieba 是可选的 native addon（C++ 编译产物）。
-// 使用懒加载 + 缓存，避免未安装时整个模块加载崩溃。
+// @node-rs/jieba 是预编译的 napi 模块，全平台都有 prebuilt，几乎不会装失败。
+// 仍保留懒加载 + try-catch，万一拉不到 native binary 时降级为字符级分词，避免整个模块崩。
 // undefined = 未尝试加载；null = 加载失败；其他 = 加载成功
-let jiebaModule: { cut: (text: string) => string[] } | null | undefined = undefined;
+let jiebaInstance: { cut: (text: string) => string[] } | null | undefined = undefined;
 
 function getJieba(): { cut: (text: string) => string[] } | null {
-  if (jiebaModule === undefined) {
+  if (jiebaInstance === undefined) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      jiebaModule = require('nodejieba') as { cut: (text: string) => string[] };
+      const { Jieba } = require('@node-rs/jieba') as { Jieba: { withDict: (d: Uint8Array) => { cut: (s: string, hmm?: boolean) => string[] } } };
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { dict } = require('@node-rs/jieba/dict') as { dict: Uint8Array };
+      const jieba = Jieba.withDict(dict);
+      jiebaInstance = { cut: (text: string) => jieba.cut(text, true) };
     } catch {
-      console.warn('[Tokenizer] nodejieba not available, falling back to character-level segmentation. Run: npm install nodejieba');
-      jiebaModule = null;
+      console.warn('[Tokenizer] @node-rs/jieba not available, falling back to character-level segmentation.');
+      jiebaInstance = null;
     }
   }
-  return jiebaModule;
+  return jiebaInstance;
 }
 
 /**
- * 中文字符级 fallback 分词（nodejieba 不可用时使用）。
+ * 中文字符级 fallback 分词（@node-rs/jieba 不可用时使用）。
  * 将连续中文字符串拆成单字，并生成 2-gram，保证基本的 FTS 匹配能力。
  */
 function cutChineseFallback(segment: string): string[] {
@@ -38,7 +42,7 @@ function cutChineseFallback(segment: string): string[] {
 /**
  * 智能分词（支持中英混合 + 停用词过滤）
  *
- * - 中文：优先使用 Jieba 分词；nodejieba 不可用时降级为字符级分词
+ * - 中文：优先使用 Jieba 分词；@node-rs/jieba 不可用时降级为字符级分词
  * - 英文：按空格和标点分词
  * - 混合：分别处理后合并
  * - 停用词：自动过滤无意义词
