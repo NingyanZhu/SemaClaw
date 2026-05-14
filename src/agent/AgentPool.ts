@@ -25,6 +25,13 @@ import { config } from '../config';
 import { scheduleMCPConfig, workspaceMCPConfig, memoryMCPConfig, dispatchMCPConfig, feishuWikiMCPConfig, virtualMCPConfig } from '../mcp/mcpHelper';
 import { getFeishuApps } from '../gateway/GroupManager';
 import type { PermissionPayload, AskQuestionPayload } from './PermissionBridge';
+import type {
+  WorkbenchNewPayload,
+  WorkbenchServiceReadyPayload,
+  WorkbenchServiceCrashedPayload,
+  WorkbenchServiceStoppedPayload,
+} from './WorkbenchBridge';
+import { WorkbenchBridge } from './WorkbenchBridge';
 import { getAgentAllowedWorkDirs, getAdminPermissionsConfig, getThinkingEnabled } from '../gateway/GroupManager';
 import { DailyLogger } from '../memory/DailyLogger';
 import { MemoryManager, formatSearchResults } from '../memory/MemoryManager';
@@ -57,6 +64,10 @@ export interface AgentEventSink {
   notifyAskQuestionResolved?(chatJid: string, requestId: string, answers: Record<string, string>): void;
   notifyAgentTodos?(agentJid: string, agentName: string, todos: { content: string; status: string; activeForm?: string }[]): void;
   notifyAgentCompacting?(chatJid: string, isCompacting: boolean): void;
+  notifyWorkbenchNew?(chatJid: string, payload: WorkbenchNewPayload): void;
+  notifyWorkbenchServiceReady?(chatJid: string, payload: WorkbenchServiceReadyPayload): void;
+  notifyWorkbenchServiceCrashed?(chatJid: string, payload: WorkbenchServiceCrashedPayload): void;
+  notifyWorkbenchServiceStopped?(chatJid: string, payload: WorkbenchServiceStoppedPayload): void;
 }
 
 /** Agent 收到 message:complete 时的主代理 ID */
@@ -106,6 +117,7 @@ export class AgentPool {
   /** jid → 对应的 GroupBinding */
   private bindings = new Map<string, GroupBinding>();
   private permissionBridge: PermissionBridge;
+  private workbenchBridge: WorkbenchBridge;
   private dailyLogger = new DailyLogger();
   private agentEventSink: AgentEventSink | null = null;
   /** 主 Agent 是否跳过权限审批（运行时状态，从 config.json 初始化） */
@@ -175,6 +187,10 @@ export class AgentPool {
     );
     // 权限消息发出或用户点击按钮时重置超时计时器，避免权限等待期间超时
     this.permissionBridge.setActivityCallback((jid) => this.notifyActivity(jid));
+    // 工作台事件桥（LaunchUI 工具产物呈现 + 非 web channel 文本通知）
+    this.workbenchBridge = new WorkbenchBridge(
+      Array.isArray(channels) ? channels : [channels],
+    );
     // 从 config.json 初始化权限开关
     const permCfg = getAdminPermissionsConfig();
     this.skipMainAgentPermissions = permCfg.skipMainAgentPermissions;
@@ -527,6 +543,38 @@ export class AgentPool {
     this.permissionBridge.onAskQuestionResolved((chatJid, requestId, answers) => {
       sink.notifyAskQuestionResolved?.(chatJid, requestId, answers);
     });
+    // WorkbenchBridge 通知接入
+    this.workbenchBridge.onNew((chatJid, payload) => {
+      sink.notifyWorkbenchNew?.(chatJid, payload);
+    });
+    this.workbenchBridge.onServiceReady((chatJid, payload) => {
+      sink.notifyWorkbenchServiceReady?.(chatJid, payload);
+    });
+    this.workbenchBridge.onServiceCrashed((chatJid, payload) => {
+      sink.notifyWorkbenchServiceCrashed?.(chatJid, payload);
+    });
+    this.workbenchBridge.onServiceStopped((chatJid, payload) => {
+      sink.notifyWorkbenchServiceStopped?.(chatJid, payload);
+    });
+  }
+
+  // ===== Workbench 反向操作（由 WsGateway 转入） =====
+
+  markWorkbenchViewed(chatJid: string, artifactId: string): boolean {
+    return this.workbenchBridge.markViewed(chatJid, artifactId);
+  }
+  closeWorkbench(chatJid: string, artifactId: string): Promise<boolean> {
+    return this.workbenchBridge.close(chatJid, artifactId);
+  }
+  readWorkbenchFile(
+    chatJid: string,
+    artifactId: string,
+    filePath: string,
+  ): Promise<{ content?: string; error?: string }> {
+    return this.workbenchBridge.readFile(chatJid, artifactId, filePath);
+  }
+  fetchWorkbenchLogs(chatJid: string, artifactId: string, tailLines: number): Promise<string> {
+    return this.workbenchBridge.fetchLogs(chatJid, artifactId, tailLines);
   }
 
   /** 获取所有缓存的 agent todos 快照（供 WsGateway subscribe 时初始推送） */
@@ -636,7 +684,7 @@ export class AgentPool {
     const EXCLUDED_TOOLS = ['Task']
     const ALL_POOLED_TOOLS = [
       'Bash', 'Glob', 'Grep', 'Read', 'Write', 'Edit',
-      'TodoWrite', 'Skill', 'NotebookEdit', 'AskUser',
+      'TodoWrite', 'Skill', 'NotebookEdit', 'AskUser', 'LaunchUI',
     ]
     const useTools = binding.allowedTools
       ? binding.allowedTools.filter(t => !EXCLUDED_TOOLS.includes(t))
@@ -666,7 +714,8 @@ export class AgentPool {
     memSnap('after new SemaCore');
 
     const cleanupPermission = this.permissionBridge.bindCore(core, binding);
-    this.bindEvents(core, binding, cleanupPermission);
+    const cleanupWorkbench = this.workbenchBridge.bindCore(core, binding);
+    this.bindEvents(core, binding, cleanupPermission, cleanupWorkbench);
 
     try {
     /** 带超时的 addOrUpdateMCPServer，失败时仅打印 warning 不中断启动。内置服务默认 30s，marketplace/用户 MCP 传 180s */
@@ -1447,7 +1496,7 @@ export class AgentPool {
     this.workspaceWatchers.set(jid, () => fs.unwatchFile(stateFile, handler));
   }
 
-  private bindEvents(core: SemaCore, binding: GroupBinding, cleanupPermission?: () => void): void {
+  private bindEvents(core: SemaCore, binding: GroupBinding, cleanupPermission?: () => void, cleanupWorkbench?: () => void): void {
     // 记录本轮最后一条 agent 消息，供 dispatch 任务完成时使用
     let lastReplyContent = '';
 
@@ -1537,6 +1586,7 @@ export class AgentPool {
       core.off('compact:exec', onCompactExec);
       core.off('session:error', onSessionError);
       cleanupPermission?.();
+      cleanupWorkbench?.();
     });
   }
 }

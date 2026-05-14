@@ -55,6 +55,12 @@ import type { GroupQueue } from '../agent/GroupQueue';
 import type { TelegramChannel } from '../channels/telegram';
 import type { QQChannel } from '../channels/qq';
 import type { PermissionPayload, AskQuestionPayload } from '../agent/PermissionBridge';
+import type {
+  WorkbenchNewPayload,
+  WorkbenchServiceReadyPayload,
+  WorkbenchServiceCrashedPayload,
+  WorkbenchServiceStoppedPayload,
+} from '../agent/WorkbenchBridge';
 import type { DispatchParent } from '../agent/DispatchBridge';
 
 // ===== 内部类型 =====
@@ -94,6 +100,12 @@ type OutboundMsg =
   | { type: 'feishu-apps'; apps: { appId: string; domain: string }[] }
   | { type: 'qq-app:registered'; appId: string }
   | { type: 'qq-app:unregistered'; appId: string }
+  | ({ type: 'workbench:new'; groupJid: string } & WorkbenchNewPayload)
+  | ({ type: 'workbench:service_ready'; groupJid: string } & WorkbenchServiceReadyPayload)
+  | ({ type: 'workbench:service_crashed'; groupJid: string } & WorkbenchServiceCrashedPayload)
+  | ({ type: 'workbench:service_stopped'; groupJid: string } & WorkbenchServiceStoppedPayload)
+  | { type: 'workbench:read_file:response'; requestId: string; content?: string; error?: string }
+  | { type: 'workbench:fetch_logs:response'; requestId: string; content: string }
   | { type: 'error'; message: string };
 
 interface GroupInfo {
@@ -283,6 +295,26 @@ export class WebSocketGateway {
       requestId,
       answers,
     });
+  }
+
+  /** WorkbenchBridge 新工作台创建时调用 */
+  notifyWorkbenchNew(chatJid: string, payload: WorkbenchNewPayload): void {
+    this.broadcast(chatJid, { type: 'workbench:new', groupJid: chatJid, ...payload });
+  }
+
+  /** WorkbenchBridge 服务就绪时调用 */
+  notifyWorkbenchServiceReady(chatJid: string, payload: WorkbenchServiceReadyPayload): void {
+    this.broadcast(chatJid, { type: 'workbench:service_ready', groupJid: chatJid, ...payload });
+  }
+
+  /** WorkbenchBridge 服务崩溃时调用 */
+  notifyWorkbenchServiceCrashed(chatJid: string, payload: WorkbenchServiceCrashedPayload): void {
+    this.broadcast(chatJid, { type: 'workbench:service_crashed', groupJid: chatJid, ...payload });
+  }
+
+  /** WorkbenchBridge 服务停止时调用（idle / 手动） */
+  notifyWorkbenchServiceStopped(chatJid: string, payload: WorkbenchServiceStoppedPayload): void {
+    this.broadcast(chatJid, { type: 'workbench:service_stopped', groupJid: chatJid, ...payload });
   }
 
   /** DispatchBridge state 变化时调用，推送给所有 admin 客户端 */
@@ -753,6 +785,69 @@ export class WebSocketGateway {
           return;
         }
         this.agentPool.resolveAskQuestionBatch(requestId, answers, otherTexts);
+        return;
+      }
+
+      case 'workbench:viewed': {
+        if (!this.requireAuth(client)) return;
+        const groupJid = String(msg.groupJid ?? '');
+        const artifactId = String(msg.artifactId ?? '');
+        if (!groupJid || !artifactId) {
+          this.send(client, { type: 'error', message: 'groupJid and artifactId required' });
+          return;
+        }
+        this.agentPool.markWorkbenchViewed(groupJid, artifactId);
+        return;
+      }
+
+      case 'workbench:close': {
+        if (!this.requireAuth(client)) return;
+        const groupJid = String(msg.groupJid ?? '');
+        const artifactId = String(msg.artifactId ?? '');
+        if (!groupJid || !artifactId) {
+          this.send(client, { type: 'error', message: 'groupJid and artifactId required' });
+          return;
+        }
+        await this.agentPool.closeWorkbench(groupJid, artifactId);
+        return;
+      }
+
+      case 'workbench:read_file': {
+        if (!this.requireAuth(client)) return;
+        const requestId = String(msg.requestId ?? '');
+        const groupJid = String(msg.groupJid ?? '');
+        const artifactId = String(msg.artifactId ?? '');
+        const filePath = String(msg.path ?? '');
+        if (!requestId || !groupJid || !artifactId || !filePath) {
+          this.send(client, { type: 'error', message: 'requestId, groupJid, artifactId, path required' });
+          return;
+        }
+        const result = await this.agentPool.readWorkbenchFile(groupJid, artifactId, filePath);
+        this.send(client, {
+          type: 'workbench:read_file:response',
+          requestId,
+          content: result.content,
+          error: result.error,
+        });
+        return;
+      }
+
+      case 'workbench:fetch_logs': {
+        if (!this.requireAuth(client)) return;
+        const requestId = String(msg.requestId ?? '');
+        const groupJid = String(msg.groupJid ?? '');
+        const artifactId = String(msg.artifactId ?? '');
+        const tailLines = typeof msg.tailLines === 'number' ? msg.tailLines : 200;
+        if (!requestId || !groupJid || !artifactId) {
+          this.send(client, { type: 'error', message: 'requestId, groupJid, artifactId required' });
+          return;
+        }
+        const content = await this.agentPool.fetchWorkbenchLogs(groupJid, artifactId, tailLines);
+        this.send(client, {
+          type: 'workbench:fetch_logs:response',
+          requestId,
+          content,
+        });
         return;
       }
 

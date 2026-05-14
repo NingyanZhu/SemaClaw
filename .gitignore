@@ -47,3 +47,6 @@ yarn-error.log
 
 # Local settings
 settings.local.json
+
+# LaunchUI workbench runtime state (per-agent artifacts, PIDs, temp deliverables)
+workbench/

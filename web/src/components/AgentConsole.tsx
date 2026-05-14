@@ -10,6 +10,12 @@ interface AgentConsoleProps {
   groups: GroupInfo[];
   agentStates: Record<string, AgentState>;
   resolvePermission: (requestId: string, optionKey: string) => void;
+  /** 由 App.tsx 控制是否展开（mutex with Workbench） */
+  expanded: boolean;
+  /** 请求展开（auto-expand on activity 时调用） */
+  onExpand: () => void;
+  /** 用户手动收起 */
+  onCollapse: () => void;
 }
 
 const PERM_OPTION_STYLE: Record<string, string> = {
@@ -22,7 +28,7 @@ const PERM_OPTION_STYLE: Record<string, string> = {
 };
 const DEFAULT_OPT_STYLE = 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100';
 
-export function AgentConsole({ dispatchParents, agentTodos, messages, groups, agentStates, resolvePermission }: AgentConsoleProps) {
+export function AgentConsole({ dispatchParents, agentTodos, messages, groups, agentStates, resolvePermission, expanded, onExpand, onCollapse }: AgentConsoleProps) {
   const activeParents = dispatchParents.filter(p => p.status === 'active');
   const queuedParents = dispatchParents.filter(p => p.status === 'queued');
   const hasActivity = activeParents.length > 0 || queuedParents.length > 0;
@@ -33,10 +39,6 @@ export function AgentConsole({ dispatchParents, agentTodos, messages, groups, ag
   const adminState: AgentState = adminJid ? (agentStates[adminJid] ?? 'idle') : 'idle';
   const adminPaused = adminState === 'paused';
 
-  // Start expanded if dispatch is already active on mount; otherwise collapsed
-  const [collapsed, setCollapsed] = useState(() => !dispatchParents.some(
-    p => p.status === 'active' || p.status === 'queued'
-  ));
   const [selectedTask, setSelectedTask] = useState<DispatchTask | null>(null);
 
   // Pending permissions from ALL agents (scan all message lists)
@@ -55,7 +57,8 @@ export function AgentConsole({ dispatchParents, agentTodos, messages, groups, ag
 
   // Auto-expand when dispatch becomes active
   useEffect(() => {
-    if (hasActivity) setCollapsed(false);
+    if (hasActivity) onExpand();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActivity]);
 
   // Selected task's agent todos for the detail panel
@@ -70,32 +73,8 @@ export function AgentConsole({ dispatchParents, agentTodos, messages, groups, ag
 
   const hasTodos = Object.keys(agentTodos).length > 0;
 
-  // Collapsed badge — always visible
-  if (collapsed) {
-    const totalPending = pendingPermissions.length;
-    return (
-      <div className="flex flex-col items-center gap-2 w-10 flex-shrink-0 border-l border-gray-100 py-3 bg-white">
-        <button
-          onClick={() => setCollapsed(false)}
-          className="relative flex flex-col items-center gap-1 text-gray-400 hover:text-[#5BBFE8] transition-colors"
-          title="Open Agent Console"
-        >
-          <span className="text-base">⚙</span>
-          {totalPending > 0 && (
-            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
-              {totalPending}
-            </span>
-          )}
-          {hasActivity && (
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-          )}
-          {!hasActivity && hasTodos && (
-            <span className="w-1.5 h-1.5 rounded-full bg-[#5BBFE8]" />
-          )}
-        </button>
-      </div>
-    );
-  }
+  // 收起时不渲染（badge 统一由 App.tsx 的 DockBadges 渲染）
+  if (!expanded) return null;
 
   return (
     <div className="flex flex-col flex-1 min-w-0 border-l border-gray-100 bg-[#F5F8FB] overflow-hidden">
@@ -122,7 +101,7 @@ export function AgentConsole({ dispatchParents, agentTodos, messages, groups, ag
           )}
         </div>
         <button
-          onClick={() => setCollapsed(true)}
+          onClick={onCollapse}
           className="text-gray-400 hover:text-gray-600 text-xs px-1.5 py-0.5 rounded hover:bg-gray-100"
         >
           Hide ▸

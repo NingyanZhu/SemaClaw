@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, ImageAttachment } from '../types';
+import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, ImageAttachment, WorkbenchArtifact, WorkbenchState } from '../types';
 
 interface WsConfig {
   wsPort: number;
@@ -32,6 +32,19 @@ export interface WsHook {
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>; // keyed by agentJid
   subscribeAll: () => void;
+  // ===== Workbench (LaunchUI) =====
+  /** jid → 工作台状态 */
+  workbench: Record<string, WorkbenchState>;
+  /** 最新到达的 (jid, artifactId)，前端用于触发抢前台 effect */
+  workbenchLatest: { jid: string; artifactId: string; at: number } | null;
+  /** 通知后端用户切到某工作台前台（更新 last_active） */
+  workbenchMarkViewed: (jid: string, artifactId: string) => void;
+  /** 关闭工作台（移出历史、杀进程） */
+  workbenchClose: (jid: string, artifactId: string) => void;
+  /** 请求读取 artifact 文件内容（请求-响应，返回 Promise） */
+  workbenchReadFile: (jid: string, artifactId: string, path: string) => Promise<{ content?: string; error?: string }>;
+  /** 取 service 类工作台的日志末尾 N 行 */
+  workbenchFetchLogs: (jid: string, artifactId: string, tailLines?: number) => Promise<string>;
 }
 
 export function useWebSocket(): WsHook {
@@ -43,6 +56,11 @@ export function useWebSocket(): WsHook {
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
+  const [workbench, setWorkbench]             = useState<Record<string, WorkbenchState>>({});
+  const [workbenchLatest, setWorkbenchLatest] = useState<{ jid: string; artifactId: string; at: number } | null>(null);
+
+  /** workbench 请求-响应 (read_file / fetch_logs) 的 pending Map */
+  const wbPendingRef = useRef<Map<string, (data: { content?: string; error?: string }) => void>>(new Map());
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
@@ -179,6 +197,58 @@ export function useWebSocket(): WsHook {
 
   const stopAgent = useCallback((jid: string) => {
     rawSend({ type: 'agent:control', groupJid: jid, action: 'stop' });
+  }, [rawSend]);
+
+  // ===== Workbench send methods =====
+
+  const workbenchMarkViewed = useCallback((jid: string, artifactId: string) => {
+    rawSend({ type: 'workbench:viewed', groupJid: jid, artifactId });
+  }, [rawSend]);
+
+  const workbenchClose = useCallback((jid: string, artifactId: string) => {
+    rawSend({ type: 'workbench:close', groupJid: jid, artifactId });
+    // 本地立即移除
+    setWorkbench(prev => {
+      const cur = prev[jid];
+      if (!cur) return prev;
+      const isCurrent = cur.current?.id === artifactId;
+      return {
+        ...prev,
+        [jid]: {
+          current: isCurrent ? null : cur.current,
+          history: cur.history.filter(a => a.id !== artifactId),
+        },
+      };
+    });
+  }, [rawSend]);
+
+  const workbenchReadFile = useCallback((jid: string, artifactId: string, path: string): Promise<{ content?: string; error?: string }> => {
+    return new Promise((resolve) => {
+      const requestId = `wbr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      wbPendingRef.current.set(requestId, resolve);
+      rawSend({ type: 'workbench:read_file', requestId, groupJid: jid, artifactId, path });
+      // 10s 超时
+      setTimeout(() => {
+        if (wbPendingRef.current.has(requestId)) {
+          wbPendingRef.current.delete(requestId);
+          resolve({ error: 'timeout' });
+        }
+      }, 10000);
+    });
+  }, [rawSend]);
+
+  const workbenchFetchLogs = useCallback((jid: string, artifactId: string, tailLines: number = 200): Promise<string> => {
+    return new Promise((resolve) => {
+      const requestId = `wbl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      wbPendingRef.current.set(requestId, (data) => resolve(data.content ?? ''));
+      rawSend({ type: 'workbench:fetch_logs', requestId, groupJid: jid, artifactId, tailLines });
+      setTimeout(() => {
+        if (wbPendingRef.current.has(requestId)) {
+          wbPendingRef.current.delete(requestId);
+          resolve('');
+        }
+      }, 10000);
+    });
   }, [rawSend]);
 
   const subscribeAll = useCallback(() => {
@@ -337,6 +407,66 @@ export function useWebSocket(): WsHook {
             });
             break;
           }
+          case 'workbench:new': {
+            const wbJid = msg.groupJid as string;
+            const artifact = msg.artifact as WorkbenchArtifact;
+            setWorkbench(prev => {
+              const cur = prev[wbJid] ?? { current: null, history: [] };
+              const newHistory = cur.current ? [cur.current, ...cur.history.filter(a => a.id !== cur.current!.id)] : cur.history;
+              return {
+                ...prev,
+                [wbJid]: { current: artifact, history: newHistory.filter(a => a.id !== artifact.id) },
+              };
+            });
+            setWorkbenchLatest({ jid: wbJid, artifactId: artifact.id, at: Date.now() });
+            break;
+          }
+          case 'workbench:service_ready':
+          case 'workbench:service_crashed':
+          case 'workbench:service_stopped': {
+            const wbJid = msg.groupJid as string;
+            const aid = msg.artifactId as string;
+            const statusUpdate = (a: WorkbenchArtifact): WorkbenchArtifact => {
+              if (a.id !== aid || !a.process) return a;
+              if (msg.type === 'workbench:service_ready') {
+                return { ...a, process: { ...a.process, status: 'running' } };
+              }
+              if (msg.type === 'workbench:service_crashed') {
+                return { ...a, process: { ...a.process, status: 'crashed' } };
+              }
+              return { ...a, process: { ...a.process, status: 'stopped' } };
+            };
+            setWorkbench(prev => {
+              const cur = prev[wbJid];
+              if (!cur) return prev;
+              return {
+                ...prev,
+                [wbJid]: {
+                  current: cur.current ? statusUpdate(cur.current) : null,
+                  history: cur.history.map(statusUpdate),
+                },
+              };
+            });
+            break;
+          }
+          case 'workbench:read_file:response': {
+            const rid = msg.requestId as string;
+            const resolver = wbPendingRef.current.get(rid);
+            if (resolver) {
+              wbPendingRef.current.delete(rid);
+              resolver({ content: msg.content as string | undefined, error: msg.error as string | undefined });
+            }
+            break;
+          }
+          case 'workbench:fetch_logs:response': {
+            const rid = msg.requestId as string;
+            const resolver = wbPendingRef.current.get(rid);
+            if (resolver) {
+              wbPendingRef.current.delete(rid);
+              resolver({ content: msg.content as string });
+            }
+            break;
+          }
           case 'agent:todos': {
             const todoJid = msg.agentJid as string;
             const todosArr = msg.todos as AgentTodosEntry['todos'];
@@ -415,5 +545,11 @@ export function useWebSocket(): WsHook {
   // suppress unused warning — findRequestJid is available for future use
   void findRequestJid;
 
-  return { status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll };
+  return {
+    status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage,
+    pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion,
+    registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup,
+    dispatchParents, agentTodos, subscribeAll,
+    workbench, workbenchLatest, workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs,
+  };
 }

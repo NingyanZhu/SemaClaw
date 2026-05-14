@@ -1,15 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AgentConsole } from './components/AgentConsole';
+import { Workbench } from './components/Workbench';
+import { DockBadges } from './components/DockBadges';
 import { useWebSocket } from './hooks/useWebSocket';
+
+type ExpandedDock = 'agent' | 'workbench' | null;
 
 export function App() {
   const [selectedJid, setSelectedJid]   = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expandedDock, setExpandedDock] = useState<ExpandedDock>(null);
+  /** 用户手动收起后，本次 workbenchLatest 不再触发抢前台 */
+  const [suppressedLatestAt, setSuppressedLatestAt] = useState<number | null>(null);
   const ws = useWebSocket();
-  const { dispatchParents, agentTodos, subscribeAll } = ws;
+  const { dispatchParents, agentTodos, subscribeAll, workbench, workbenchLatest, workbenchReadFile, workbenchClose, workbenchMarkViewed } = ws;
 
   // When dispatch is active, subscribe to all agents to receive their permission/todo events
   useEffect(() => {
@@ -29,12 +36,70 @@ export function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws.groups.length]);
 
+  // 新工作台到达：抢前台展开 Workbench（除非用户刚手动收起这一条）
+  useEffect(() => {
+    if (!workbenchLatest) return;
+    if (suppressedLatestAt === workbenchLatest.at) return;
+    if (workbenchLatest.jid !== selectedJid) return; // 仅当事件所属 jid 是当前选中群组时弹
+    setExpandedDock('workbench');
+  }, [workbenchLatest, suppressedLatestAt, selectedJid]);
+
   const handleSelect = (jid: string) => {
     setSelectedJid(jid);
     if (!ws.subscribed.has(jid)) ws.subscribe(jid);
   };
 
   const selectedGroup = ws.groups.find(g => g.jid === selectedJid);
+  const workbenchState = selectedJid ? (workbench[selectedJid] ?? null) : null;
+
+  // Workbench 回调：固定到当前选中 jid
+  const wbReadFile = useCallback((artifactId: string, path: string) => {
+    if (!selectedJid) return Promise.resolve({ error: 'no_jid' });
+    return workbenchReadFile(selectedJid, artifactId, path);
+  }, [selectedJid, workbenchReadFile]);
+
+  const wbClose = useCallback((artifactId: string) => {
+    if (!selectedJid) return;
+    workbenchClose(selectedJid, artifactId);
+  }, [selectedJid, workbenchClose]);
+
+  const wbMarkViewed = useCallback((artifactId: string) => {
+    if (!selectedJid) return;
+    workbenchMarkViewed(selectedJid, artifactId);
+  }, [selectedJid, workbenchMarkViewed]);
+
+  const wbSelect = useCallback((artifactId: string) => {
+    if (!selectedJid) return;
+    // 把历史里的 artifact 提到 current（仅前端状态，后端不需要变）
+    // 由 useWebSocket 维护 workbench 字段：这里没有专门的 setter，
+    // 简化：用 markViewed 触发即可——current 不变但日志最新。
+    // 真要切换 current，需要从 hook 暴露 setCurrent。这里 v1 让历史只读，
+    // 切换由 LLM 再次调用 LaunchUI 触发（与 v1 替换语义一致）。
+    wbMarkViewed(artifactId);
+  }, [selectedJid, wbMarkViewed]);
+
+  // ExpandedDock 互斥控制
+  const setAgentExpanded = useCallback(() => setExpandedDock('agent'), []);
+  const collapseDock = useCallback((which: 'agent' | 'workbench') => {
+    setExpandedDock(null);
+    if (which === 'workbench' && workbenchLatest) {
+      // 抑制本次 latest 的二次抢前台
+      setSuppressedLatestAt(workbenchLatest.at);
+    }
+  }, [workbenchLatest]);
+
+  /** Dock badge toggle：点击 active 收起，点击 inactive 切换 */
+  const onToggleDock = useCallback((which: 'agent' | 'workbench') => {
+    setExpandedDock(prev => {
+      if (prev === which) {
+        if (which === 'workbench' && workbenchLatest) {
+          setSuppressedLatestAt(workbenchLatest.at);
+        }
+        return null;
+      }
+      return which;
+    });
+  }, [workbenchLatest]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-white">
@@ -92,6 +157,29 @@ export function App() {
         groups={ws.groups}
         agentStates={ws.agentStates}
         resolvePermission={ws.resolvePermission}
+        expanded={expandedDock === 'agent'}
+        onExpand={setAgentExpanded}
+        onCollapse={() => collapseDock('agent')}
+      />
+
+      <Workbench
+        state={workbenchState}
+        expanded={expandedDock === 'workbench'}
+        onCollapse={() => collapseDock('workbench')}
+        readFile={wbReadFile}
+        closeArtifact={wbClose}
+        selectArtifact={wbSelect}
+        markViewed={wbMarkViewed}
+      />
+
+      <DockBadges
+        expanded={expandedDock}
+        onToggle={onToggleDock}
+        dispatchParents={dispatchParents}
+        agentTodos={agentTodos}
+        messages={ws.messages}
+        groups={ws.groups}
+        workbenchState={workbenchState}
       />
     </div>
   );

@@ -128,3 +128,37 @@ export interface AgentTodosEntry {
   agentName: string;
   todos: AgentTodoItem[];
 }
+
+// ===== Workbench (LaunchUI) =====
+
+export interface WorkbenchFile {
+  path: string;
+  hash: string;
+  extension: 'html' | 'md';
+}
+
+export interface WorkbenchProcess {
+  pid: number;
+  status: 'running' | 'stopped' | 'crashed';
+  lastActive: number;
+  logPath: string;
+}
+
+export interface WorkbenchArtifact {
+  id: string;
+  instanceId: string;
+  agentId: string;
+  mode: 'static' | 'web' | 'backend';
+  title: string;
+  createdAt: number;
+  files?: WorkbenchFile[];
+  url?: string;
+  usage?: string;
+  process?: WorkbenchProcess;
+}
+
+/** 工作台前端状态：每 groupJid 一份 */
+export interface WorkbenchState {
+  current: WorkbenchArtifact | null;
+  history: WorkbenchArtifact[];  // 不含 current（current 单独存）
+}
