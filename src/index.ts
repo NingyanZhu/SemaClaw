@@ -18,19 +18,20 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { config } from './config';
 
 // ===== model.conf 隔离（必须在任何 sema-core 模块加载前执行）=====
-// semaclaw 使用独立的 ~/.semaclaw/semaclaw-model.conf，避免与其他基于 sema-code-core
-// 的应用（如 sema-code 编辑器）共享 ~/.sema/model.conf 造成互相干扰。
+// semaclaw 使用独立的 model.conf（路径由 config.paths.modelConfPath 解析），
+// 避免与其他基于 sema-code-core 的应用（如 sema-code 编辑器）共享
+// ~/.sema/model.conf 造成互相干扰。
 {
-  const SEMACLAW_DIR = path.join(os.homedir(), '.semaclaw');
-  const semaclawModelConf = path.join(SEMACLAW_DIR, 'semaclaw-model.conf');
+  const semaclawModelConf = config.paths.modelConfPath;
   if (!fs.existsSync(semaclawModelConf)) {
     const defaultModelConf = path.join(os.homedir(), '.sema', 'model.conf');
     if (fs.existsSync(defaultModelConf)) {
-      fs.mkdirSync(SEMACLAW_DIR, { recursive: true });
+      fs.mkdirSync(path.dirname(semaclawModelConf), { recursive: true });
       fs.copyFileSync(defaultModelConf, semaclawModelConf);
-      console.log('[SemaClaw] Migrated ~/.sema/model.conf → ~/.semaclaw/semaclaw-model.conf');
+      console.log(`[SemaClaw] Migrated ~/.sema/model.conf → ${semaclawModelConf}`);
     }
   }
   // 动态 require 以确保 override 在模块初始化前生效
@@ -54,7 +55,6 @@ import { MessageRouter } from './gateway/MessageRouter';
 import { TaskScheduler } from './scheduler/TaskScheduler';
 import { WebSocketGateway } from './gateway/WebSocketGateway';
 import { UIServer } from './gateway/UIServer';
-import { config } from './config';
 import { DispatchBridge } from './agent/DispatchBridge';
 import { PersonaRegistry } from './agent/PersonaRegistry';
 import { VirtualWorkerPool } from './agent/VirtualWorkerPool';

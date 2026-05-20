@@ -1,6 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, ImageAttachment, WorkbenchArtifact, WorkbenchState } from '../types';
 
+// ===== workbench 本地持久化（防止页面刷新丢失已 launch 的 UI tab）=====
+// 仅前端持久化：daemon 仍存活时刷新页面完全恢复；daemon 重启后旧的 backend
+// 服务进程已死，对应 artifact 仍显示但用户需手动关闭。
+const WORKBENCH_STORAGE_KEY = 'semaclaw:workbench:v1';
+
+function loadWorkbench(): Record<string, WorkbenchState> {
+  try {
+    const raw = window.localStorage.getItem(WORKBENCH_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, WorkbenchState>;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkbench(state: Record<string, WorkbenchState>): void {
+  try {
+    window.localStorage.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    /* quota / private mode: 静默忽略，刷新不保留即可 */
+  }
+}
+
 interface WsConfig {
   wsPort: number;
   token: string;
@@ -58,8 +81,13 @@ export function useWebSocket(): WsHook {
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
-  const [workbench, setWorkbench]             = useState<Record<string, WorkbenchState>>({});
+  const [workbench, setWorkbench]             = useState<Record<string, WorkbenchState>>(() => loadWorkbench());
   const [workbenchLatest, setWorkbenchLatest] = useState<{ jid: string; artifactId: string; at: number } | null>(null);
+
+  // 把 workbench 状态镜像到 localStorage，刷新页面后从 loadWorkbench() 恢复
+  useEffect(() => {
+    saveWorkbench(workbench);
+  }, [workbench]);
 
   /** workbench 请求-响应 (read_file / fetch_logs) 的 pending Map */
   const wbPendingRef = useRef<Map<string, (data: { content?: string; error?: string }) => void>>(new Map());
@@ -227,7 +255,28 @@ export function useWebSocket(): WsHook {
   const workbenchReadFile = useCallback((jid: string, artifactId: string, path: string): Promise<{ content?: string; error?: string }> => {
     return new Promise((resolve) => {
       const requestId = `wbr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      wbPendingRef.current.set(requestId, resolve);
+      // 包一层：若后端报 artifact 已不存在（其他 tab 关掉了 / daemon 重启清掉了），
+      // 顺手把本 tab 的 localStorage 状态也 prune 一下，下次刷新就不会再出现
+      const wrappedResolve = (data: { content?: string; error?: string }) => {
+        if (data.error === 'artifact_not_found' || data.error === 'core_not_found') {
+          setWorkbench(prev => {
+            const cur = prev[jid];
+            if (!cur) return prev;
+            const inState = cur.current?.id === artifactId || cur.history.some(a => a.id === artifactId);
+            if (!inState) return prev;
+            const isCurrent = cur.current?.id === artifactId;
+            return {
+              ...prev,
+              [jid]: {
+                current: isCurrent ? null : cur.current,
+                history: cur.history.filter(a => a.id !== artifactId),
+              },
+            };
+          });
+        }
+        resolve(data);
+      };
+      wbPendingRef.current.set(requestId, wrappedResolve);
       rawSend({ type: 'workbench:read_file', requestId, groupJid: jid, artifactId, path });
       // 10s 超时
       setTimeout(() => {

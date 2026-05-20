@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs';
 import * as dotenv from 'dotenv';
 
 
@@ -7,17 +8,52 @@ dotenv.config();
 
 const home = os.homedir();
 
-const env = (key: string, fallback?: string): string => {
-  const val = process.env[key] ?? fallback;
-  if (val === undefined) throw new Error(`Missing required env var: ${key}`);
-  return val;
-};
-
 const envOptional = (key: string, fallback: string): string =>
   process.env[key] ?? fallback;
 
 const envInt = (key: string, fallback: number): number =>
   parseInt(process.env[key] ?? String(fallback), 10);
+
+// ============================================================
+// 根目录解析
+//
+// 两个总开关：
+//   SEMACLAW_HOME         → 运行数据根  (默认 ~/semaclaw)
+//   SEMACLAW_CONFIG_HOME  → 配置/状态根 (默认 ~/.semaclaw)
+//
+// 优先级：细粒度 env > 总开关 env > config.json > 默认值
+//
+// 注意 SEMACLAW_CONFIG_HOME 只能来自 env —— config.json 本身就在它下面，
+// 鸡生蛋问题。WebUI 编辑 configHome 只能写到现有 config.json 里供下次启动
+// 参考，实际生效仍以 env 为准。
+// ============================================================
+
+const SEMACLAW_HOME_DEFAULT = path.join(home, 'semaclaw');
+const SEMACLAW_CONFIG_HOME_DEFAULT = path.join(home, '.semaclaw');
+
+const semaclawConfigHome = path.resolve(
+  envOptional('SEMACLAW_CONFIG_HOME', SEMACLAW_CONFIG_HOME_DEFAULT)
+);
+
+const globalConfigPath = path.resolve(
+  envOptional('SEMACLAW_CONFIG_PATH', path.join(semaclawConfigHome, 'config.json'))
+);
+
+/** 启动期从 config.json 读 paths.home，作为 SEMACLAW_HOME 未设时的回落值。 */
+function readHomeFromConfigJson(): string | undefined {
+  try {
+    if (!fs.existsSync(globalConfigPath)) return undefined;
+    const raw = JSON.parse(fs.readFileSync(globalConfigPath, 'utf8')) as { paths?: { home?: unknown } };
+    const v = raw?.paths?.home;
+    return typeof v === 'string' && v.trim() ? path.resolve(v) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const semaclawHome = process.env.SEMACLAW_HOME
+  ? path.resolve(process.env.SEMACLAW_HOME)
+  : (readHomeFromConfigJson() ?? SEMACLAW_HOME_DEFAULT);
 
 export const config = {
   telegram: {
@@ -66,58 +102,74 @@ export const config = {
 
   paths: {
     /**
-     * ~/.semaclaw/semaclaw.db — 持久化存储（DB、router state 等）
+     * 运行数据根：~/semaclaw (默认)
+     * 派生：agentsDir / workspaceDir / wikiDir / virtualAgentsDir
+     */
+    home: semaclawHome,
+    /**
+     * 配置/状态根：~/.semaclaw (默认)
+     * 派生：dbPath / globalConfigPath / dispatchStatePath / managedSkillsDir / modelConfPath
+     */
+    configHome: semaclawConfigHome,
+
+    /**
+     * ${configHome}/semaclaw.db — 持久化存储（DB、router state 等）
      */
     dbPath: path.resolve(
-      envOptional('DB_PATH', path.join(home, '.semaclaw', 'semaclaw.db'))
+      envOptional('DB_PATH', path.join(semaclawConfigHome, 'semaclaw.db'))
     ),
     /**
-     * ~/semaclaw/agents/{folder}/ — agentDataDir
+     * ${home}/agents/{folder}/ — agentDataDir
      * 存放 agent 人格文件（CLAUDE.md/soul）、memory/、.sema/sessions/
      */
     agentsDir: path.resolve(
-      envOptional('AGENTS_DIR', path.join(home, 'semaclaw', 'agents'))
+      envOptional('AGENTS_DIR', path.join(semaclawHome, 'agents'))
     ),
     /**
-     * ~/semaclaw/workspace/{folder}/ — 默认工作目录
+     * ${home}/workspace/{folder}/ — 默认工作目录
      * 存放项目相关文档，agent 无明确项目上下文时在此工作
      */
     workspaceDir: path.resolve(
-      envOptional('WORKSPACE_DIR', path.join(home, 'semaclaw', 'workspace'))
+      envOptional('WORKSPACE_DIR', path.join(semaclawHome, 'workspace'))
     ),
     /**
-     * ~/.semaclaw/config.json — 全局配置
+     * ${configHome}/config.json — 全局配置
      * 用户可编辑，存放 allowedWorkDirs 等 per-agent 配置；启动时覆盖 DB 对应字段
      */
-    globalConfigPath: path.resolve(
-      envOptional('SEMACLAW_CONFIG_PATH', path.join(home, '.semaclaw', 'config.json'))
-    ),
+    globalConfigPath,
     /**
-     * ~/.semaclaw/dispatch-state.json — 主 Agent 任务调度状态文件
+     * ${configHome}/dispatch-state.json — 主 Agent 任务调度状态文件
      * 存放可用 agent 列表 + 待执行/执行中/已完成的 dispatch 任务
      */
     dispatchStatePath: path.resolve(
-      envOptional('SEMACLAW_DISPATCH_STATE_PATH', path.join(home, '.semaclaw', 'dispatch-state.json'))
+      envOptional('SEMACLAW_DISPATCH_STATE_PATH', path.join(semaclawConfigHome, 'dispatch-state.json'))
     ),
     /**
-     * ~/.semaclaw/managed/skills — ClaWHub 安装的 skills
+     * ${configHome}/managed/skills — ClaWHub 安装的 skills
      * 由 `semaclaw clawhub install` 管理，对所有群组 agent 可见
      */
     managedSkillsDir: path.resolve(
-      envOptional('MANAGED_SKILLS_DIR', path.join(home, '.semaclaw', 'managed', 'skills'))
+      envOptional('MANAGED_SKILLS_DIR', path.join(semaclawConfigHome, 'managed', 'skills'))
     ),
     /**
-     * ~/semaclaw/wiki/ — 个人知识库目录（独立 git repo）
+     * ${home}/wiki/ — 个人知识库目录（独立 git repo）
      */
     wikiDir: path.resolve(
-      envOptional('WIKI_DIR', path.join(home, 'semaclaw', 'wiki'))
+      envOptional('WIKI_DIR', path.join(semaclawHome, 'wiki'))
     ),
     /**
-     * ~/semaclaw/virtual-agents — 虚拟 agent 人设目录
+     * ${home}/virtual-agents — 虚拟 agent 人设目录
      * 存放 *.md 人设文件，PersonaRegistry 直接扫描此目录
      */
     virtualAgentsDir: path.resolve(
-      envOptional('SEMACLAW_VIRTUAL_AGENTS_DIR', path.join(home, 'semaclaw', 'virtual-agents'))
+      envOptional('SEMACLAW_VIRTUAL_AGENTS_DIR', path.join(semaclawHome, 'virtual-agents'))
+    ),
+    /**
+     * ${configHome}/semaclaw-model.conf — sema-core 模型配置文件路径
+     * 通过 setModelConfigPathOverride 注入，使所有 CLI 子命令与 daemon 共享同一份。
+     */
+    modelConfPath: path.resolve(
+      envOptional('SEMACLAW_MODEL_CONF_PATH', path.join(semaclawConfigHome, 'semaclaw-model.conf'))
     ),
     /**
      * <packageRoot>/skills — semaclaw 内置 bundled skills
@@ -128,6 +180,23 @@ export const config = {
       const raw = envOptional('SEMACLAW_BUNDLED_SKILLS_DIR', path.join(__dirname, '..', 'skills'))
       return raw.trim() ? path.resolve(raw) : ''
     })(),
+    /**
+     * 哪些路径被 env 锁定（UI 用来禁用对应输入框）。
+     * 任一 env 显式设值即视为锁定，无论值是否等于默认。
+     */
+    envLocked: {
+      home: !!process.env.SEMACLAW_HOME,
+      configHome: !!process.env.SEMACLAW_CONFIG_HOME,
+      agentsDir: !!process.env.AGENTS_DIR,
+      workspaceDir: !!process.env.WORKSPACE_DIR,
+      wikiDir: !!process.env.WIKI_DIR,
+      virtualAgentsDir: !!process.env.SEMACLAW_VIRTUAL_AGENTS_DIR,
+      dbPath: !!process.env.DB_PATH,
+      globalConfigPath: !!process.env.SEMACLAW_CONFIG_PATH,
+      dispatchStatePath: !!process.env.SEMACLAW_DISPATCH_STATE_PATH,
+      managedSkillsDir: !!process.env.MANAGED_SKILLS_DIR,
+      modelConfPath: !!process.env.SEMACLAW_MODEL_CONF_PATH,
+    },
   },
   memory: {
     /** Embedding 提供商：none=纯FTS, openai/openrouter/ollama/local=混合搜索 */
