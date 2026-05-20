@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { AgentPool } from '../agent/AgentPool';
-import { saveAdminPermissionsConfig, loadLLMConfigs, saveLLMConfig, updateLLMConfig, removeLLMConfig, setActiveLLMConfig, setActiveQuickLLMConfig, saveThinkingEnabled, type LLMConfig } from './GroupManager';
+import { saveAdminPermissionsConfig, loadLLMConfigs, saveLLMConfig, updateLLMConfig, removeLLMConfig, setActiveLLMConfig, setActiveQuickLLMConfig, saveThinkingEnabled, getPathsConfig, savePathsConfig, type LLMConfig } from './GroupManager';
 import { syncLLMConfigToCore } from './llmModelSync';
 import { getModelManager, fetchModels as coreFetchModels, testApiConnection as coreTestApiConnection } from 'sema-core';
 import type { WikiManager } from '../wiki/WikiManager';
@@ -764,6 +764,78 @@ export class UIServer {
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(
           JSON.stringify(opts)
         );
+        return;
+      }
+    }
+
+    if (urlPath === '/api/paths-config') {
+      if (req.method === 'GET') {
+        const stored = getPathsConfig();
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+          // 当前生效值（env > config.json > 默认）
+          resolved: {
+            home: config.paths.home,
+            configHome: config.paths.configHome,
+            agentsDir: config.paths.agentsDir,
+            workspaceDir: config.paths.workspaceDir,
+            wikiDir: config.paths.wikiDir,
+            virtualAgentsDir: config.paths.virtualAgentsDir,
+            dbPath: config.paths.dbPath,
+            globalConfigPath: config.paths.globalConfigPath,
+            dispatchStatePath: config.paths.dispatchStatePath,
+            managedSkillsDir: config.paths.managedSkillsDir,
+            modelConfPath: config.paths.modelConfPath,
+          },
+          // config.json 中保存的 home（可能与 resolved.home 不同：env 锁定时 resolved 走 env）
+          stored: { home: stored.home ?? null },
+          envLocked: config.paths.envLocked,
+        }));
+        return;
+      }
+      if (req.method === 'POST') {
+        const body = await this.readBody(req);
+        const opts = JSON.parse(body) as { home?: string | null };
+
+        // env 锁定时拒绝写入
+        if (opts.home !== undefined && config.paths.envLocked.home) {
+          res.writeHead(409, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+            error: 'home is locked by env SEMACLAW_HOME; edit .env to change it',
+          }));
+          return;
+        }
+
+        // 校验 home 路径
+        if (opts.home !== undefined && opts.home !== null && opts.home !== '') {
+          const v = opts.home.trim();
+          if (!path.isAbsolute(v)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'home must be an absolute path' }));
+            return;
+          }
+          const resolved = path.resolve(v);
+          if (resolved === '/' || resolved === path.parse(resolved).root) {
+            res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'home cannot be filesystem root' }));
+            return;
+          }
+          // 必须可创建/可写
+          try {
+            fs.mkdirSync(resolved, { recursive: true });
+            fs.accessSync(resolved, fs.constants.W_OK);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+              error: `home is not writable: ${e instanceof Error ? e.message : String(e)}`,
+            }));
+            return;
+          }
+          opts.home = resolved;
+        }
+
+        savePathsConfig(opts);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+          ok: true,
+          requiresRestart: true,
+          stored: { home: opts.home ?? null },
+        }));
         return;
       }
     }

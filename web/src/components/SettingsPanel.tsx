@@ -3,7 +3,8 @@ import type { GroupInfo, RegisterGroupPayload, UpdateGroupPayload } from '../typ
 
 // ===== Types =====
 
-type Tab = 'permissions' | 'agents' | 'llm';
+type Tab = 'basic' | 'agents' | 'llm';
+type BasicSubTab = 'permissions' | 'paths';
 
 // ===== LLM Config types & constants =====
 
@@ -141,9 +142,9 @@ const MODEL_LIMITS_TABLE: Array<[string, { maxTokens: number; contextLength: num
   ['glm-4',               { maxTokens: 8192,    contextLength: 128000  }],
   ['glm-z1',              { maxTokens: 32768,   contextLength: 32768   }],
   // Qwen / 通义
-  ['qwen3',               { maxTokens: 32768,   contextLength: 32768   }],
+  ['qwen3',               { maxTokens: 32768,   contextLength: 256000  }],
   ['qwen-long',           { maxTokens: 8192,    contextLength: 1000000 }],
-  ['qwen-max',            { maxTokens: 8192,    contextLength: 32000   }],
+  ['qwen-max',            { maxTokens: 8192,    contextLength: 256000  }],
   ['qwen-plus',           { maxTokens: 8192,    contextLength: 131072  }],
   ['qwen-turbo',          { maxTokens: 8192,    contextLength: 131072  }],
   ['qwq',                 { maxTokens: 32768,   contextLength: 131072  }],
@@ -274,7 +275,7 @@ function PermissionsTab() {
           />
         </div>
         <p className="text-[11px] text-gray-400 leading-relaxed">
-          开启后，主 Agent 执行文件读写、Bash 命令时无需逐步审批。
+          When enabled, main Agent can work without step-by-step approval.
           {perms.skipAllAgentsPermissions && <span className="text-[#5BBFE8]"> （已被「全部放开」覆盖）</span>}
         </p>
         {!loading && (
@@ -291,7 +292,7 @@ function PermissionsTab() {
           <Toggle value={perms.skipAllAgentsPermissions} onChange={toggleAll} disabled={loading || saving} />
         </div>
         <p className="text-[11px] text-gray-400 leading-relaxed">
-          开启后，所有 Agent（含 dispatch 子 Agent）执行工具时均无需审批。适合完全信任的本地环境。
+          Enable all Agents (including sub-Agents) tool use without approval.
         </p>
         {!loading && (
           <p className={`mt-1.5 text-[11px] font-medium ${perms.skipAllAgentsPermissions ? 'text-amber-500' : 'text-gray-400'}`}>
@@ -304,6 +305,288 @@ function PermissionsTab() {
         <p className={`text-[11px] px-1 ${feedback.ok ? 'text-green-600' : 'text-red-500'}`}>
           {feedback.msg}
         </p>
+      )}
+    </section>
+  );
+}
+
+// ===== Basic Tab (Permissions + Paths) =====
+
+function BasicTab() {
+  const [subtab, setSubtab] = useState<BasicSubTab>('permissions');
+
+  return (
+    <div className="space-y-3">
+      {/* Sub-tab pill */}
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+        <button
+          onClick={() => setSubtab('permissions')}
+          className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            subtab === 'permissions' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          权限审批
+        </button>
+        <button
+          onClick={() => setSubtab('paths')}
+          className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            subtab === 'paths' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          目录设定
+        </button>
+      </div>
+
+      {subtab === 'permissions' && <PermissionsTab />}
+      {subtab === 'paths' && <PathsSettings />}
+    </div>
+  );
+}
+
+// ===== Paths Settings =====
+
+interface PathsResolved {
+  home: string;
+  configHome: string;
+  agentsDir: string;
+  workspaceDir: string;
+  wikiDir: string;
+  virtualAgentsDir: string;
+  dbPath: string;
+  globalConfigPath: string;
+  dispatchStatePath: string;
+  managedSkillsDir: string;
+  modelConfPath: string;
+}
+
+interface PathsEnvLocked {
+  home: boolean;
+  configHome: boolean;
+  agentsDir: boolean;
+  workspaceDir: boolean;
+  wikiDir: boolean;
+  virtualAgentsDir: boolean;
+  dbPath: boolean;
+  globalConfigPath: boolean;
+  dispatchStatePath: boolean;
+  managedSkillsDir: boolean;
+  modelConfPath: boolean;
+}
+
+interface PathsConfigResp {
+  resolved: PathsResolved;
+  stored: { home: string | null };
+  envLocked: PathsEnvLocked;
+}
+
+function PathsSettings() {
+  const [data, setData] = useState<PathsConfigResp | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [homeInput, setHomeInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [ack, setAck] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/paths-config')
+      .then(async r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}（接口未注册？daemon 可能需要重启以加载新代码）`);
+        return r.json() as Promise<PathsConfigResp>;
+      })
+      .then(d => {
+        setData(d);
+        setHomeInput(d.stored.home ?? d.resolved.home);
+        setLoading(false);
+      })
+      .catch(e => {
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setLoading(false);
+      });
+  }, []);
+
+  const doSave = async () => {
+    if (!data) return;
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const r = await fetch('/api/paths-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ home: homeInput.trim() || null }),
+      });
+      const body = await r.json() as { ok?: boolean; error?: string; stored?: { home: string | null } };
+      if (!r.ok || !body.ok) {
+        setFeedback({ ok: false, msg: body.error ?? '保存失败' });
+      } else {
+        setFeedback({ ok: true, msg: '已保存，重启后生效' });
+        setData({ ...data, stored: { home: body.stored?.home ?? null } });
+      }
+    } catch (e) {
+      setFeedback({ ok: false, msg: e instanceof Error ? e.message : '网络错误' });
+    } finally {
+      setSaving(false);
+      setShowConfirm(false);
+      setAck(false);
+    }
+  };
+
+  if (loading) {
+    return <p className="text-xs text-gray-400 px-1">加载中…</p>;
+  }
+  if (loadError || !data) {
+    return (
+      <div className="space-y-2 px-1">
+        <p className="text-xs font-medium text-red-500">加载失败</p>
+        <p className="text-[11px] text-gray-500 leading-relaxed">{loadError ?? '未知错误'}</p>
+      </div>
+    );
+  }
+
+  const homeDirty = (homeInput.trim() || null) !== (data.stored.home ?? null);
+
+  return (
+    <section className="space-y-4">
+      <p className="text-[11px] font-semibold text-[#5BBFE8] uppercase tracking-wide">目录设定</p>
+
+      {/* 运行数据根 */}
+      <div className="bg-gray-50 rounded-xl p-3.5 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-800">运行数据根</span>
+          <code className="text-[10px] text-gray-400">SEMACLAW_HOME</code>
+        </div>
+        <input
+          type="text"
+          value={homeInput}
+          onChange={e => setHomeInput(e.target.value)}
+          disabled={data.envLocked.home}
+          placeholder={data.resolved.home}
+          className="w-full text-xs font-mono px-2 py-1.5 border border-gray-200 rounded-lg bg-white disabled:bg-gray-100 disabled:text-gray-400 focus:outline-none focus:border-[#5BBFE8]"
+        />
+        {data.envLocked.home && (
+          <p className="text-[11px] text-amber-600">🔒 由环境变量 SEMACLAW_HOME 锁定，要修改请编辑 .env</p>
+        )}
+        <p className="text-[11px] text-gray-400 leading-relaxed">
+          存放 agents/、workspace/、wiki/、virtual-agents/
+        </p>
+      </div>
+
+      {/* 配置/状态根 */}
+      <div className="bg-gray-50 rounded-xl p-3.5 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-800">配置/状态根</span>
+          <code className="text-[10px] text-gray-400">SEMACLAW_CONFIG_HOME</code>
+        </div>
+        <input
+          type="text"
+          value={data.resolved.configHome}
+          disabled
+          className="w-full text-xs font-mono px-2 py-1.5 border border-gray-200 rounded-lg bg-gray-100 text-gray-500"
+        />
+        <p className="text-[11px] text-amber-600">
+          🔒 配置/状态根仅可通过环境变量 SEMACLAW_CONFIG_HOME 修改（config.json 本身就在此目录下）。
+        </p>
+        <p className="text-[11px] text-gray-400 leading-relaxed">
+          存放 config.json、semaclaw.db、semaclaw-model.conf、dispatch-state.json、managed/skills/
+        </p>
+      </div>
+
+      {/* 当前生效子路径速览（折叠） */}
+      <details className="bg-gray-50 rounded-xl p-3.5">
+        <summary className="text-xs font-medium text-gray-700 cursor-pointer">查看当前生效的子路径</summary>
+        <dl className="mt-2 space-y-1 text-[11px] font-mono text-gray-500">
+          <div><dt className="inline text-gray-400">agents:</dt> <dd className="inline">{data.resolved.agentsDir}</dd></div>
+          <div><dt className="inline text-gray-400">workspace:</dt> <dd className="inline">{data.resolved.workspaceDir}</dd></div>
+          <div><dt className="inline text-gray-400">wiki:</dt> <dd className="inline">{data.resolved.wikiDir}</dd></div>
+          <div><dt className="inline text-gray-400">virtual-agents:</dt> <dd className="inline">{data.resolved.virtualAgentsDir}</dd></div>
+          <div><dt className="inline text-gray-400">db:</dt> <dd className="inline">{data.resolved.dbPath}</dd></div>
+          <div><dt className="inline text-gray-400">config.json:</dt> <dd className="inline">{data.resolved.globalConfigPath}</dd></div>
+          <div><dt className="inline text-gray-400">dispatch-state:</dt> <dd className="inline">{data.resolved.dispatchStatePath}</dd></div>
+          <div><dt className="inline text-gray-400">managed/skills:</dt> <dd className="inline">{data.resolved.managedSkillsDir}</dd></div>
+          <div><dt className="inline text-gray-400">model.conf:</dt> <dd className="inline">{data.resolved.modelConfPath}</dd></div>
+        </dl>
+      </details>
+
+      <button
+        onClick={() => setShowConfirm(true)}
+        disabled={!homeDirty || saving || data.envLocked.home}
+        className="w-full py-2 text-xs font-medium rounded-lg bg-[#5BBFE8] text-white disabled:bg-gray-200 disabled:text-gray-400 hover:bg-[#4AAFD9] transition-colors"
+      >
+        {saving ? '保存中…' : '保存（不迁移数据）'}
+      </button>
+
+      {feedback && (
+        <p className={`text-[11px] px-1 ${feedback.ok ? 'text-green-600' : 'text-red-500'}`}>
+          {feedback.msg}
+        </p>
+      )}
+
+      {/* 风险确认 modal */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={() => !saving && setShowConfirm(false)}>
+          <div className="absolute inset-0 bg-black/40" />
+          <div
+            className="relative bg-white rounded-xl shadow-xl max-w-md mx-4 p-5 space-y-3"
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-gray-800">⚠ 修改根目录前请确认</h3>
+
+            <div className="text-[12px] text-gray-600 space-y-2 leading-relaxed">
+              <p>
+                <strong>1.</strong> 修改后必须重启 SemaClaw 才会生效。
+              </p>
+              <p>
+                <strong>2.</strong> 我们不会自动迁移数据 —— 修改 = 只把指针指向新位置。
+                请自行决定：
+              </p>
+              <ul className="list-disc pl-5 space-y-0.5">
+                <li>把旧目录整体拷贝/移动到新位置（推荐用 <code className="text-[11px] bg-gray-100 px-1 rounded">cp -a</code>）</li>
+                <li>或让 SemaClaw 在新位置从零开始（旧数据不再可见）</li>
+              </ul>
+              <p>
+                <strong>3.</strong> 以下东西可能失效，重启后请检查：
+              </p>
+              <ul className="list-disc pl-5 space-y-0.5 text-[11px]">
+                <li>ClaWHub 安装的 skill（脚本里 shebang/绝对路径）</li>
+                <li>插件市场（marketplace）插件的 hook/MCP 绝对路径</li>
+                <li>定时任务里写死的工作目录</li>
+                <li>hooks.json 里未用 <code className="bg-gray-100 px-1 rounded">${'${SEMACLAW_ROOT}'}</code> 的命令</li>
+                <li>agent 自定义 mcp.json 里的绝对 cwd / command 路径</li>
+              </ul>
+              <p className="text-gray-500">
+                推荐流程：<strong>停服 → 拷贝目录 → 改路径 → 启动</strong>
+              </p>
+            </div>
+
+            <label className="flex items-center gap-2 text-[12px] text-gray-700 select-none cursor-pointer">
+              <input
+                type="checkbox"
+                checked={ack}
+                onChange={e => setAck(e.target.checked)}
+                className="rounded"
+              />
+              我已了解风险，确认仅修改路径不迁移数据
+            </label>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => { setShowConfirm(false); setAck(false); }}
+                disabled={saving}
+                className="flex-1 py-2 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={doSave}
+                disabled={!ack || saving}
+                className="flex-1 py-2 text-xs rounded-lg bg-[#5BBFE8] text-white disabled:bg-gray-200 disabled:text-gray-400 hover:bg-[#4AAFD9] transition-colors"
+              >
+                {saving ? '保存中…' : '确认保存'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );
@@ -1536,9 +1819,9 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'permissions', label: '权限' },
-    { id: 'agents',      label: 'Agents' },
-    { id: 'llm',         label: 'LLM' },
+    { id: 'basic',  label: 'Basic' },
+    { id: 'agents', label: 'Agents' },
+    { id: 'llm',    label: 'LLM' },
   ];
   return (
     <div className="flex border-b border-gray-100">
@@ -1596,7 +1879,7 @@ export function SettingsPanel({ onClose, groups, onRegisterGroup, onRegisterFeis
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4">
-          {tab === 'permissions' && <PermissionsTab />}
+          {tab === 'basic' && <BasicTab />}
           {tab === 'agents' && (
             <AgentsTab
               groups={groups}

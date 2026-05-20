@@ -207,6 +207,13 @@ interface GlobalConfig {
   activeQuickLlmConfigId?: string | null;
   /** 是否启用 Thinking 模式（默认 true） */
   thinkingEnabled?: boolean;
+  /**
+   * 根目录配置（仅持久化 home；configHome 只能由 env 决定，不写入此处）。
+   * 启动时由 src/config.ts 读取，env SEMACLAW_HOME 优先。
+   */
+  paths?: {
+    home?: string;
+  };
 }
 
 /**
@@ -467,6 +474,32 @@ export function saveAdminPermissionsConfig(opts: {
       skipAllAgentsPermissions: opts.skipAllAgentsPermissions,
     },
   });
+}
+
+// ===== 根目录配置持久化 =====
+
+/**
+ * 读 config.json 中的 paths.home。
+ * 返回 undefined 表示未配置（启动时回落到默认 ~/semaclaw 或 SEMACLAW_HOME env）。
+ */
+export function getPathsConfig(): { home?: string } {
+  const cfg = loadGlobalConfig();
+  return cfg.paths ?? {};
+}
+
+/**
+ * 写 config.json paths.home。传 home=null/undefined 删除该字段（回到默认）。
+ * 不做磁盘文件移动，仅改指针。配合 UI 风险提示由用户自行拷贝数据。
+ */
+export function savePathsConfig(opts: { home?: string | null }): void {
+  const cfg = loadGlobalConfig();
+  const next: { home?: string } = { ...(cfg.paths ?? {}) };
+  if (opts.home === null || opts.home === undefined || opts.home === '') {
+    delete next.home;
+  } else {
+    next.home = opts.home;
+  }
+  saveGlobalConfig({ ...cfg, paths: next });
 }
 
 // ===== Thinking 配置 =====

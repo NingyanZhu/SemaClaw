@@ -43,11 +43,16 @@ export function HtmlIframe({ srcdoc, sourcePath, error }: Props) {
   }, [prepared]);
 
   if (error) {
+    const closed = error === 'artifact_not_found' || error === 'core_not_found';
     return (
-      <div className="p-4 text-sm text-red-500">
-        <div className="font-semibold mb-1">无法加载 HTML</div>
+      <div className={`p-4 text-sm ${closed ? 'text-gray-500' : 'text-red-500'}`}>
+        <div className="font-semibold mb-1">
+          {closed ? '该工作台已关闭' : '无法加载 HTML'}
+        </div>
         <div className="text-xs text-gray-500">{sourcePath}</div>
-        <div className="text-xs mt-1">{error}</div>
+        <div className="text-xs mt-1">
+          {closed ? '在其他页面被关闭或服务已重启；点击右上角 × 移除此条目。' : error}
+        </div>
       </div>
     );
   }
