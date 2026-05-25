@@ -170,6 +170,12 @@ export class AgentPool {
    * resume 时同样不调 processUserInput，只恢复 dispatch 调度。
    */
   private dispatchPausedJids = new Set<string>();
+  /**
+   * jid → 下次 getOrCreate 要 resume 的 sessionId。
+   * 用户输入 resume_session <id> 时设置；getOrCreateInternal 读取后立即清除。
+   * destroy(jid) 不清此 map —— 命令流程就是「destroy → 下次重建时带 sessionId」。
+   */
+  private pendingResume = new Map<string, string>();
 
   constructor(
     private readonly sendReply: SendReply,
@@ -412,6 +418,33 @@ export class AgentPool {
 
   getThinkingEnabled(): boolean {
     return this.thinkingEnabled;
+  }
+
+  /**
+   * 标记下次创建该 jid 的 agent 时要 resume 的 sessionId。
+   * 配合 destroy(jid) 使用即可完成会话切换。
+   */
+  setPendingResume(jid: string, sessionId: string): void {
+    this.pendingResume.set(jid, sessionId);
+  }
+
+  /** 清除 pending resume（new_session 命令使用） */
+  clearPendingResume(jid: string): void {
+    this.pendingResume.delete(jid);
+  }
+
+  /**
+   * 该 jid 当前对应的 session id。
+   * 优先用 live core 的 sessionId（已运行中的会话）；其次 pendingResume；
+   * 都没有则返回 null（cold start，前端不展示历史）。
+   */
+  getCurrentSessionId(jid: string): string | null {
+    const core = this.cores.get(jid);
+    if (core) {
+      const sid = core.getCurrentSessionId();
+      if (sid) return sid;
+    }
+    return this.pendingResume.get(jid) ?? null;
   }
 
   /** 根据当前开关状态和 binding 计算该 agent 是否跳过权限 */
@@ -837,10 +870,16 @@ export class AgentPool {
 
     memSnap('before createSession');
     // createSession 带 60s 超时保护，避免无限卡住阻塞 GroupQueue
+    // 若 pendingResume 中有 sessionId，传入以恢复历史（resume_session 命令路径）
+    const resumeSessionId = this.pendingResume.get(binding.jid);
+    if (resumeSessionId) {
+      this.pendingResume.delete(binding.jid);
+      console.log(`[AgentPool] Resuming session ${resumeSessionId} for ${binding.jid}`);
+    }
     const memInterval = setInterval(() => memSnap('createSession in progress...'), 3000);
     try {
       await Promise.race([
-        core.createSession(),
+        core.createSession(resumeSessionId),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error(`createSession timeout (60s) for ${binding.folder}`)), 60_000)
         ),

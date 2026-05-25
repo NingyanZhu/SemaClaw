@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent } from 'react';
 import type { GroupInfo, ChatMessage, AgentState, ImageAttachment } from '../types';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
+import { useInputHistory } from '../hooks/useInputHistory';
 
 interface Props {
   group: GroupInfo;
@@ -22,6 +23,7 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const bottomRef                           = useRef<HTMLDivElement>(null);
   const textareaRef                         = useRef<HTMLTextAreaElement>(null);
+  const inputHistory                        = useInputHistory(group?.jid ?? null);
 
   const isProcessing = agentState === 'processing';
   const isPaused     = agentState === 'paused';
@@ -42,6 +44,7 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
     }
     if (isPaused) {
       const text = input.trim();
+      if (text) inputHistory.push(text);
       onResume(text || undefined);
       setInput('');
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -50,13 +53,59 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
     // idle：普通发送
     const text = input.trim();
     if (!text && pendingImages.length === 0) return;
+    if (text) inputHistory.push(text);
     onSend(text, pendingImages);
     setInput('');
     setPendingImages([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
+  // 把 textarea 高度同步到内容（recall 后立即调，避免历史长文本被压成 1 行）
+  const syncTextareaHeight = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // ArrowUp/Down 历史回放：仅当 caret 在首/末位置时触发，避免打断多行编辑
+    if (e.key === 'ArrowUp' && !e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey) {
+      const el = textareaRef.current;
+      if (el && el.selectionStart === 0 && el.selectionEnd === 0) {
+        const next = inputHistory.recallPrev(input);
+        if (next !== undefined) {
+          e.preventDefault();
+          setInput(next);
+          // 等下一帧 textarea 内容更新后再设光标 + 同步高度
+          requestAnimationFrame(() => {
+            if (textareaRef.current) {
+              textareaRef.current.setSelectionRange(0, 0);
+              syncTextareaHeight();
+            }
+          });
+          return;
+        }
+      }
+    }
+    if (e.key === 'ArrowDown' && !e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey) {
+      const el = textareaRef.current;
+      if (el && el.selectionStart === input.length && el.selectionEnd === input.length) {
+        const next = inputHistory.recallNext();
+        if (next !== undefined) {
+          e.preventDefault();
+          setInput(next);
+          requestAnimationFrame(() => {
+            if (textareaRef.current) {
+              const len = next.length;
+              textareaRef.current.setSelectionRange(len, len);
+              syncTextareaHeight();
+            }
+          });
+          return;
+        }
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (!isProcessing) handleActionButton();
@@ -208,7 +257,7 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
             placeholder={isPaused ? 'Add instructions or leave empty to continue…' : 'Message… (paste image with Ctrl+V / ⌘V)'}
             rows={1}
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={e => { setInput(e.target.value); inputHistory.resetCursor(); }}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
             onPaste={handlePaste}

@@ -47,7 +47,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage, ScheduledTask, TaskRunLog, GroupBinding } from '../types';
 import { getTasksByGroup, getTaskRunLogs, listAllTasks, updateTaskStatus, getTaskById, advanceTaskNextRun } from '../db/db';
 import { computeNextRunOnResume } from '../scheduler/TaskScheduler';
-import { dispatchCommand } from './CommandDispatcher';
+import { dispatchCommand, dispatchSessionCommand } from './CommandDispatcher';
+import { getAgentCurrentWorkingDir, loadSessionTranscript, type TranscriptEntry } from '../agent/SessionStore';
 import type { GroupManager } from './GroupManager';
 import { saveFeishuApp, deleteFeishuApp, getFeishuApps, saveQQApp, deleteQQApp, saveTelegramBot, deleteTelegramBot } from './GroupManager';
 import type { AgentPool } from '../agent/AgentPool';
@@ -87,6 +88,7 @@ type OutboundMsg =
   | { type: 'task:backlog'; taskId: string; chatJid: string; prompt: string; intervalMs: number; overdueMs: number; suggestedIntervalMs: number }
   | { type: 'incoming'; groupJid: string; senderName: string; text: string; timestamp: string; isFromMe: boolean }
   | { type: 'agent:reply'; groupJid: string; text: string }
+  | { type: 'chat:history'; groupJid: string; sessionId: string; entries: TranscriptEntry[] }
   | { type: 'agent:state'; groupJid: string; state: string }
   | { type: 'agent:compacting'; groupJid: string; isCompacting: boolean }
   | { type: 'permission:request'; groupJid: string; requestId: string } & PermissionPayload
@@ -384,6 +386,24 @@ export class WebSocketGateway {
     }
   }
 
+  /**
+   * 订阅时回放 agent 的当前 session 历史。
+   * 仅当 AgentPool 能定位到 sessionId（live core 已存在 或 有 pendingResume）才推送，
+   * 否则前端继续从空白开始累积实时事件。
+   */
+  private sendChatHistory(client: WsClient, jid: string, group: GroupBinding): void {
+    try {
+      const sessionId = this.agentPool.getCurrentSessionId(jid);
+      if (!sessionId) return;
+      const workingDir = getAgentCurrentWorkingDir(group.folder);
+      const entries = loadSessionTranscript(workingDir, sessionId);
+      if (entries.length === 0) return;
+      this.send(client, { type: 'chat:history', groupJid: jid, sessionId, entries });
+    } catch (e) {
+      console.warn(`[WsGateway] sendChatHistory failed for ${jid}: ${e}`);
+    }
+  }
+
   private handleConnection(ws: WebSocket): void {
     const client: WsClient = { ws, authenticated: false, isAdmin: false, subscriptions: new Set() };
     this.clients.add(client);
@@ -447,6 +467,10 @@ export class WebSocketGateway {
         if (knownState) {
           this.send(client, { type: 'agent:state', groupJid: jid, state: knownState });
         }
+        // 回放当前 session 的聊天历史（刷新/重连后恢复渲染）。
+        // 仅当能确定 sessionId 时推送：live core 有 → 用其当前 sessionId；
+        // 否则等用户发首条消息后才会有 session，前端那时通过 incoming/agent:reply 实时累积。
+        if (group) this.sendChatHistory(client, jid, group);
         this.send(client, { type: 'subscribed', groupJid: jid });
         return;
       }
@@ -756,6 +780,15 @@ export class WebSocketGateway {
         if (!group) {
           this.send(client, { type: 'error', message: `Group not found: ${groupJid}` });
           return;
+        }
+        // 会话管理命令（所有 agent 群组可用）：在入队前拦截。
+        // MessageRouter 路径上有同样拦截覆盖 channel 入口；这里覆盖 web UI 直发路径。
+        if (text) {
+          const sessionResult = await dispatchSessionCommand(text, { group, agentPool: this.agentPool });
+          if (sessionResult !== null) {
+            this.send(client, { type: 'agent:reply', groupJid, text: sessionResult });
+            return;
+          }
         }
         this.groupQueue.enqueue(groupJid, () =>
           this.agentPool.processAndWait(groupJid, group, text, undefined, attachments)

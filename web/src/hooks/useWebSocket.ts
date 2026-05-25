@@ -257,8 +257,10 @@ export function useWebSocket(): WsHook {
       const requestId = `wbr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       // 包一层：若后端报 artifact 已不存在（其他 tab 关掉了 / daemon 重启清掉了），
       // 顺手把本 tab 的 localStorage 状态也 prune 一下，下次刷新就不会再出现
+      // 注意：core_not_found 是 transient（resume_session / destroy → 下次 getOrCreate 之间），
+      // 不可作为 prune 信号 —— artifact registry 是 process-global 的，下次 core 起来还会回来
       const wrappedResolve = (data: { content?: string; error?: string }) => {
-        if (data.error === 'artifact_not_found' || data.error === 'core_not_found') {
+        if (data.error === 'artifact_not_found') {
           setWorkbench(prev => {
             const cur = prev[jid];
             if (!cur) return prev;
@@ -361,6 +363,22 @@ export function useWebSocket(): WsHook {
           case 'subscribed':
             setSubscribed(prev => new Set([...prev, msg.groupJid as string]));
             break;
+          case 'chat:history': {
+            // 服务端在 subscribe 时回放当前 session 的完整文本历史，
+            // 客户端用其作为 messages[jid] 的初始 seed（覆盖之前的内存状态）。
+            const jid = msg.groupJid as string;
+            const sessionId = msg.sessionId as string;
+            const entries = (msg.entries as { role: 'user' | 'assistant'; senderName?: string; text: string; index: number }[]) ?? [];
+            const seed: ChatMessage[] = entries.map(e => ({
+              id:         `hist-${sessionId}-${e.index}`,
+              role:       e.role === 'assistant' ? 'agent' : 'other',
+              senderName: e.senderName,
+              text:       e.text,
+              timestamp:  '',
+            }));
+            setMessages(prev => ({ ...prev, [jid]: seed }));
+            break;
+          }
           case 'incoming':
             if (msg.isFromMe) break;
             addMessage(msg.groupJid as string, {

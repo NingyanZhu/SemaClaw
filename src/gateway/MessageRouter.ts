@@ -20,7 +20,7 @@ import { AgentPool } from '../agent/AgentPool';
 import { GroupQueue } from '../agent/GroupQueue';
 import { buildPromptForGroup } from '../agent/SessionBridge';
 import { insertMessage, setLastAgentTimestamp } from '../db/db';
-import { dispatchCommand } from './CommandDispatcher';
+import { dispatchCommand, dispatchSessionCommand } from './CommandDispatcher';
 
 /** WsGateway incoming 通知接口（解耦） */
 interface IncomingNotifier {
@@ -56,13 +56,19 @@ export class MessageRouter {
    */
   start(): void {
     for (const channel of this.channels) {
-      channel.onMessage((msg) => this.handleIncoming(msg));
+      // handleIncoming 现在是 async（dispatchSessionCommand 需要 await）。
+      // channel onMessage 不感知 Promise，挂个 .catch 防止 unhandledRejection。
+      channel.onMessage((msg) =>
+        this.handleIncoming(msg).catch((err) => {
+          console.error(`[MessageRouter] handleIncoming failed for ${msg.chatJid}:`, err);
+        }),
+      );
     }
   }
 
   // ===== Internal =====
 
-  private handleIncoming(msg: IncomingMessage): void {
+  private async handleIncoming(msg: IncomingMessage): Promise<void> {
     console.log(`[MessageRouter] Incoming msg from ${msg.chatJid} (${msg.chatType}): "${msg.content.slice(0, 60)}"`);
 
     // 1. 查找已注册的群组绑定
@@ -106,7 +112,19 @@ export class MessageRouter {
       return;
     }
 
-    // 4. isAdmin 群组：命令拦截（直接执行，不走 Agent）
+    // 4a. 会话管理命令（所有 agent 群组可用：list_sessions / resume_session / new_session）
+    //     置于 isAdmin 任务命令之前，确保任何 agent 都能管理自己的会话。
+    const sessionResult = await dispatchSessionCommand(msg.content, {
+      group,
+      agentPool: this.agentPool,
+    });
+    if (sessionResult !== null) {
+      console.log(`[MessageRouter] Session command handled for ${msg.chatJid}`);
+      this.agentPool.broadcastReply(msg.chatJid, sessionResult, group.botToken ?? undefined);
+      return;
+    }
+
+    // 4b. isAdmin 群组：任务管理命令（直接执行，不走 Agent）
     if (group.isAdmin) {
       const result = dispatchCommand(msg.content);
       if (result !== null) {
