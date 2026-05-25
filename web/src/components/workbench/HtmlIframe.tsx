@@ -15,6 +15,11 @@ interface Props {
  * under the same origin as semaclaw's webui, would load the webui inside
  * the iframe → nested chat UI).
  *
+ * 同时注入一段 hash-anchor 拦截脚本：markdown 生成的 `#标题` 锚点会被
+ * <base target="_blank"> 一起劫持，导致点击后 `<semaclaw-url>/#标题` 在新
+ * tab 里打开 semaclaw 首页。拦截脚本让 `#xxx` 这种纯锚点在 iframe 内滚动，
+ * 同路径+锚点（如 `page#sec`）仍走 _blank。
+ *
  * If a <head> exists, prepend the <base> there; otherwise wrap the doc in
  * a minimal <html><head>...<base>...</head><body>{doc}</body></html>.
  */
@@ -23,13 +28,15 @@ function withBaseTarget(html: string): string {
   // `<base href="...">` doesn't change link-target behavior, so we still inject.
   if (/<base\b[^>]*\btarget\s*=/i.test(html)) return html;
   const baseTag = '<base target="_blank">';
+  const hashScript = '<script>(function(){document.addEventListener("click",function(e){var n=e.target;while(n&&n.nodeType===1&&n.tagName!=="A"){n=n.parentElement;}if(!n||n.tagName!=="A")return;var h=n.getAttribute("href");if(!h||h.charAt(0)!=="#")return;e.preventDefault();var id=decodeURIComponent(h.slice(1));if(!id){window.scrollTo({top:0,behavior:"smooth"});return;}var t=document.getElementById(id);if(!t){try{t=document.querySelector(\'a[name="\'+(window.CSS&&CSS.escape?CSS.escape(id):id.replace(/["\\\\]/g,"\\\\$&"))+\'"]\');}catch(_){}}if(t&&t.scrollIntoView)t.scrollIntoView({behavior:"smooth",block:"start"});},true);})();</script>';
+  const inject = baseTag + hashScript;
   if (/<head\b[^>]*>/i.test(html)) {
-    return html.replace(/<head\b[^>]*>/i, (m) => `${m}${baseTag}`);
+    return html.replace(/<head\b[^>]*>/i, (m) => `${m}${inject}`);
   }
   if (/<html\b[^>]*>/i.test(html)) {
-    return html.replace(/<html\b[^>]*>/i, (m) => `${m}<head>${baseTag}</head>`);
+    return html.replace(/<html\b[^>]*>/i, (m) => `${m}<head>${inject}</head>`);
   }
-  return `<!doctype html><html><head>${baseTag}</head><body>${html}</body></html>`;
+  return `<!doctype html><html><head>${inject}</head><body>${html}</body></html>`;
 }
 
 export function HtmlIframe({ srcdoc, sourcePath, error }: Props) {
