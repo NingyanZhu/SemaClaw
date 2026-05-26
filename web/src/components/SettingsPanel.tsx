@@ -484,8 +484,13 @@ function PathsSettings() {
           disabled
           className="w-full text-xs font-mono px-2 py-1.5 border border-gray-200 rounded-lg bg-gray-100 text-gray-500"
         />
-        <p className="text-[11px] text-amber-600">
-          🔒 配置/状态根仅可通过环境变量 SEMACLAW_CONFIG_HOME 修改（config.json 本身就在此目录下）。
+        <p className="text-[11px] text-amber-600 leading-relaxed">
+          🔒 仅可通过环境变量 <code className="bg-amber-50 px-1 rounded">SEMACLAW_CONFIG_HOME</code> 修改
+          （config.json 自身就在此目录下，无法在 WebUI 切换）。
+          <br />
+          <strong>修改后不会自动迁移数据。</strong>正确流程：停服 →
+          手动 <code className="bg-amber-50 px-1 rounded">cp -a</code> 旧目录到新位置 → 改 .env → 启动。
+          跳过拷贝则 semaclaw 会在新位置从零开始，旧数据不再可见（但未删除）。
         </p>
         <p className="text-[11px] text-gray-400 leading-relaxed">
           存放 config.json、semaclaw.db、semaclaw-model.conf、dispatch-state.json、managed/skills/
