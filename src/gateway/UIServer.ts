@@ -622,7 +622,7 @@ export class UIServer {
 
     // ── Hooks config ────────────────────────────────────────────
     if (urlPath === '/api/hooks') {
-      const hooksPath = path.join(os.homedir(), '.semaclaw', 'hooks.json');
+      const hooksPath = path.join(config.paths.configHome, 'hooks.json');
       if (req.method === 'GET') {
         try {
           const raw = fs.readFileSync(hooksPath, 'utf-8');
@@ -674,7 +674,7 @@ export class UIServer {
             }
           }
         }
-        fs.mkdirSync(path.join(os.homedir(), '.semaclaw'), { recursive: true });
+        fs.mkdirSync(config.paths.configHome, { recursive: true });
         fs.writeFileSync(hooksPath, JSON.stringify(parsed, null, 2), 'utf-8');
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: true }));
         return;
@@ -683,7 +683,7 @@ export class UIServer {
 
     // ── User global MCP config ───────────────────────────────────────
     if (urlPath === '/api/mcp') {
-      const mcpConfigPath = path.join(os.homedir(), '.semaclaw', 'mcp.json');
+      const mcpConfigPath = path.join(config.paths.configHome, 'mcp.json');
       if (req.method === 'GET') {
         try {
           const raw = fs.readFileSync(mcpConfigPath, 'utf-8');
@@ -726,7 +726,7 @@ export class UIServer {
             return;
           }
         }
-        fs.mkdirSync(path.join(os.homedir(), '.semaclaw'), { recursive: true });
+        fs.mkdirSync(config.paths.configHome, { recursive: true });
         fs.writeFileSync(mcpConfigPath, JSON.stringify(parsed, null, 2), 'utf-8');
         const newConfigs = Object.entries(servers).map(([name, cfg]) => ({
           ...(cfg as Record<string, unknown>),

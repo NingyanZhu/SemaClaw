@@ -22,6 +22,7 @@ import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const qrterm = require('qrcode-terminal') as { generate: (text: string, opts: { small: boolean }) => void };
 import type { IChannel, IncomingMessage, ChatMeta, InlineButton } from '../types';
+import { config } from '../config';
 type CallbackQueryHandler = (callbackData: string, chatJid: string) => string | void;
 
 // ─────────────────────────────────────────────
@@ -87,7 +88,7 @@ interface WeixinAccountData {
 }
 
 function resolveWeixinStateDir(): string {
-  return path.join(os.homedir(), '.semaclaw', 'wechat', 'accounts');
+  return path.join(config.paths.configHome, 'wechat', 'accounts');
 }
 
 function resolveAccountPath(accountId: string): string {

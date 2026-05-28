@@ -14,7 +14,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { getProjectHistoryDir } from 'sema-core';
 import { config } from '../config';
 
@@ -31,7 +30,7 @@ export interface SessionSummary {
  * 不存在则回落到 paths.workspaceDir/{folder}。
  */
 export function getAgentCurrentWorkingDir(folder: string): string {
-  const stateFile = path.join(os.homedir(), '.semaclaw', `workspace-state-${folder}.json`);
+  const stateFile = path.join(config.paths.configHome, `workspace-state-${folder}.json`);
   try {
     if (fs.existsSync(stateFile)) {
       const raw = fs.readFileSync(stateFile, 'utf8');

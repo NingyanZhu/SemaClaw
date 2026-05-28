@@ -1,7 +1,7 @@
 /**
  * Skill enable/disable 持久化存储
  *
- * 存储路径：~/.semaclaw/disabled-skills.json
+ * 存储路径：${SEMACLAW_CONFIG_HOME}/disabled-skills.json （默认 ~/.semaclaw/）
  * 格式：{ "disabled": ["docx", "pdf", ...] }
  *
  * 设计原则：
@@ -12,10 +12,10 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import * as os from 'node:os'
+import { config } from '../config'
 
 // Mutable so tests can override the path without affecting production use
-let DISABLED_SKILLS_FILE = path.join(os.homedir(), '.semaclaw', 'disabled-skills.json')
+let DISABLED_SKILLS_FILE = path.join(config.paths.configHome, 'disabled-skills.json')
 
 // In-memory cache — null means "not yet loaded"
 let _cache: Set<string> | null = null

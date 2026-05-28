@@ -23,10 +23,10 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import type { GroupBinding } from '../types';
 import type { PersonaRegistry } from './PersonaRegistry';
 import type { VirtualWorkerPool } from './VirtualWorkerPool';
+import { config } from '../config';
 
 // ===== Types =====
 
@@ -668,7 +668,7 @@ export class DispatchBridge {
    */
   private readAdminWorkspace(adminFolder: string): string {
     try {
-      const stateFile = path.join(os.homedir(), '.semaclaw', `workspace-state-${adminFolder}.json`);
+      const stateFile = path.join(config.paths.configHome, `workspace-state-${adminFolder}.json`);
       const raw = fs.readFileSync(stateFile, 'utf-8');
       return (JSON.parse(raw) as { currentDir?: string }).currentDir ?? '';
     } catch {

@@ -15,7 +15,6 @@
  */
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -24,6 +23,7 @@ import type { DispatchState, DispatchParent, DispatchTask } from '../agent/Dispa
 import { PersonaRegistry } from '../agent/PersonaRegistry';
 import { readDisabledSubagents } from '../subagents/disabled.js';
 import { getMarketplaceManager } from '../marketplace/MarketplaceManager.js';
+import { config } from '../config.js';
 
 // TS2589 workaround: MCP SDK zod type instantiation
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,7 +53,7 @@ if (personaRegistry) {
 /** 读取 admin agent 当前工作目录（workspace state 文件） */
 function readAdminWorkspace(): string {
   try {
-    const stateFile = path.join(os.homedir(), '.semaclaw', `workspace-state-${adminFolder}.json`);
+    const stateFile = path.join(config.paths.configHome, `workspace-state-${adminFolder}.json`);
     const raw = fs.readFileSync(stateFile, 'utf-8');
     return (JSON.parse(raw) as { currentDir?: string }).currentDir ?? '';
   } catch {

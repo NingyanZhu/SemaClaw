@@ -5,18 +5,18 @@
  * 在 admin agent 的 tool_use 上下文中阻塞执行虚拟 agent 任务。
  *
  * 环境变量：
- *   SEMACLAW_AGENTS_CONFIG_DIR  — 人设文件目录（~/.semaclaw/agents）
+ *   SEMACLAW_AGENTS_CONFIG_DIR  — 人设文件目录（${SEMACLAW_HOME}/agents）
  *   SEMACLAW_ADMIN_FOLDER       — admin agent folder（用于读取 workspace state）
  *   SEMACLAW_DEFAULT_WORKSPACE  — 默认 workspace 路径（fallback）
  */
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
+import { config } from '../config';
 
 // ===== model.conf 隔离（必须在 sema-core 加载前执行）=====
 {
-  const semaclawModelConf = path.join(os.homedir(), '.semaclaw', 'semaclaw-model.conf');
+  const semaclawModelConf = path.join(config.paths.configHome, 'semaclaw-model.conf');
   if (fs.existsSync(semaclawModelConf)) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { setModelConfigPathOverride } = require('sema-core') as { setModelConfigPathOverride: (p: string) => void };
@@ -54,7 +54,7 @@ const defaultWorkspace = process.env.SEMACLAW_DEFAULT_WORKSPACE ?? '';
 /** 读取 admin agent 当前工作目录（与 dispatch-server 同模式） */
 function readCurrentWorkspace(): string {
   try {
-    const stateFile = path.join(os.homedir(), '.semaclaw', `workspace-state-${adminFolder}.json`);
+    const stateFile = path.join(config.paths.configHome, `workspace-state-${adminFolder}.json`);
     const raw = fs.readFileSync(stateFile, 'utf-8');
     return (JSON.parse(raw) as { currentDir?: string }).currentDir ?? defaultWorkspace;
   } catch {

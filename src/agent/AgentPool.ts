@@ -79,7 +79,7 @@ const AGENT_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟
 
 /** 工作区状态文件路径 */
 function workspaceStateFile(folder: string): string {
-  return path.join(os.homedir(), '.semaclaw', `workspace-state-${folder}.json`);
+  return path.join(config.paths.configHome, `workspace-state-${folder}.json`);
 }
 
 
@@ -320,7 +320,7 @@ export class AgentPool {
     this.mcpWarmupStarted = true;
     void (async () => {
       try {
-        const probeDir = path.join(os.homedir(), '.semaclaw', '__mcp_probe__');
+        const probeDir = path.join(config.paths.configHome, '__mcp_probe__');
         fs.mkdirSync(path.join(probeDir, '.sema'), { recursive: true });
         fs.writeFileSync(path.join(probeDir, '.sema', 'mcp.json'), JSON.stringify({ mcpServers: {} }), 'utf-8');
 
@@ -837,8 +837,8 @@ export class AgentPool {
       await addMCP(cfg as Parameters<typeof core.addOrUpdateMCPServer>[0], `Marketplace[${cfg.name}]`, 180_000);
     }
 
-    // 注入用户全局 MCP 配置（~/.semaclaw/mcp.json，同样给 180s）
-    const userMCPPath = path.join(os.homedir(), '.semaclaw', 'mcp.json');
+    // 注入用户全局 MCP 配置（${SEMACLAW_CONFIG_HOME}/mcp.json，同样给 180s）
+    const userMCPPath = path.join(config.paths.configHome, 'mcp.json');
     if (fs.existsSync(userMCPPath)) {
       try {
         const userMCPData = JSON.parse(fs.readFileSync(userMCPPath, 'utf-8')) as { mcpServers?: Record<string, unknown> };
@@ -902,7 +902,7 @@ export class AgentPool {
       this.probeCore = undefined;
       this.mcpWarmupStarted = false;
       probe.dispose().catch((e: unknown) => console.warn('[AgentPool:probe] dispose failed:', e));
-      const probeDir = path.join(os.homedir(), '.semaclaw', '__mcp_probe__');
+      const probeDir = path.join(config.paths.configHome, '__mcp_probe__');
       fs.rm(probeDir, { recursive: true, force: true }, () => {});
     }
 

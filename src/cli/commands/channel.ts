@@ -15,11 +15,18 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-function getConfigPath(): string {
-  return process.env.SEMACLAW_CONFIG_PATH ?? path.join(os.homedir(), '.semaclaw', 'config.json');
+// 独立读写 config.json，不引入 src/config.ts（避免 dotenv 等副作用）
+// 但仍要尊重 SEMACLAW_CONFIG_HOME env，否则与主进程错配。
+function getConfigHome(): string {
+  return process.env.SEMACLAW_CONFIG_HOME
+    ? path.resolve(process.env.SEMACLAW_CONFIG_HOME)
+    : path.join(os.homedir(), '.semaclaw');
 }
 
-// 独立读写 config.json，不引入 src/config.ts（避免 dotenv 等副作用）
+function getConfigPath(): string {
+  return process.env.SEMACLAW_CONFIG_PATH ?? path.join(getConfigHome(), 'config.json');
+}
+
 interface TelegramBotEntry {
   token: string;
   adminUserId: string;
@@ -569,7 +576,7 @@ export function cmdWechatRemove(opts: { group: string }): void {
   writeConfig({ ...cfg, wechatAccounts: accounts, groups: filtered });
 
   // 删除凭证文件和状态文件（best-effort）
-  const stateDir = path.join(os.homedir(), '.semaclaw', 'wechat');
+  const stateDir = path.join(getConfigHome(), 'wechat');
   const filesToDelete = [
     path.join(stateDir, 'accounts', `${group}.json`),
     path.join(stateDir, `sync-buf-${group}.bin`),

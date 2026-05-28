@@ -1,7 +1,7 @@
 /**
  * Subagent (virtual persona) enable/disable 持久化存储
  *
- * 存储路径：~/.semaclaw/disabled-subagents.json
+ * 存储路径：${SEMACLAW_CONFIG_HOME}/disabled-subagents.json （默认 ~/.semaclaw/）
  * 格式：{ "disabled": ["persona-name", ...] }
  *
  * 设计原则：
@@ -11,9 +11,9 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import * as os from 'node:os'
+import { config } from '../config'
 
-let DISABLED_SUBAGENTS_FILE = path.join(os.homedir(), '.semaclaw', 'disabled-subagents.json')
+let DISABLED_SUBAGENTS_FILE = path.join(config.paths.configHome, 'disabled-subagents.json')
 
 let _cache: Set<string> | null = null
 

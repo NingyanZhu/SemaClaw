@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type {
   MarketplaceSource,
@@ -17,8 +16,9 @@ import { expandSkillsDir, type SkillLocate } from '../skills/expand.js';
 import { readDisabledSkills } from '../skills/disabled.js';
 import { readDisabledSubagents } from '../subagents/disabled.js';
 import { cloneOrPull } from './GitSync.js';
+import { config } from '../config.js';
 
-const SEMACLAW_DIR = path.join(os.homedir(), '.semaclaw');
+const SEMACLAW_DIR = config.paths.configHome;
 const MARKETPLACE_CONFIG_PATH = path.join(SEMACLAW_DIR, 'marketplace.json');
 const MARKETPLACE_STATE_PATH = path.join(SEMACLAW_DIR, 'marketplace-state.json');
 const MARKETPLACE_CLONES_DIR = path.join(SEMACLAW_DIR, 'marketplace');
