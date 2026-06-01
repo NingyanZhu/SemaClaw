@@ -80,7 +80,7 @@ export interface WorkflowDef {
 // ============================================================
 
 export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
-export type RunStatus = 'running' | 'done' | 'partial-failed' | 'cancelled';
+export type RunStatus = 'running' | 'done' | 'partial-failed' | 'cancelled' | 'interrupted';
 
 /** observe 的实际产出（捕获后存进 run 记录，推给 UI） */
 export interface ObserveOutput {
@@ -120,7 +120,7 @@ export interface WorkflowRun {
   /** 本次 run 的共享 workspace 目录 */
   runDir: string;
   steps: StepRun[];
-  /** 触发来源：cli / mcp:<jid> / schedule / ui:<jid> */
+  /** 触发来源：cli / schedule / ui:<jid> */
   trigger?: string;
   createdAt: string;
   completedAt?: string;

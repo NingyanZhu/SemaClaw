@@ -457,6 +457,12 @@ async function main(): Promise<void> {
     taskScheduler.stop();
 
     try {
+      workflowService.flush(); // 把 workflow run 的内存中间态刷到磁盘
+    } catch (err) {
+      console.error('[SemaClaw] Error flushing WorkflowService:', err);
+    }
+
+    try {
       await telegramChannel.disconnect();
     } catch (err) {
       console.error('[SemaClaw] Error disconnecting TelegramChannel:', err);

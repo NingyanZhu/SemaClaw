@@ -177,7 +177,7 @@ export interface WorkflowDefSummary {
 }
 
 export type WfStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
-export type WorkflowRunStatus = 'running' | 'done' | 'partial-failed' | 'cancelled';
+export type WorkflowRunStatus = 'running' | 'done' | 'partial-failed' | 'cancelled' | 'interrupted';
 
 export interface WfObserveOutput {
   label: string;

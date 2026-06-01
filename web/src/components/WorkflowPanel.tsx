@@ -20,6 +20,7 @@ const RUN_PILL: Record<WorkflowRunStatus, string> = {
   done: 'bg-green-50 text-green-700',
   'partial-failed': 'bg-red-50 text-red-700',
   cancelled: 'bg-gray-100 text-gray-500',
+  interrupted: 'bg-amber-50 text-amber-700',
 };
 const STEP_PILL: Record<WfStepStatus, string> = {
   pending: 'text-gray-400',

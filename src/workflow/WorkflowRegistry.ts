@@ -11,6 +11,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseYaml } from 'yaml';
+import { envSegment, extractTemplateStepRefs } from './template';
 import type { WorkflowDef, WorkflowStep, WorkflowInput, StepKind, ObserveSpec, ObserveFrom } from './types';
 
 const VALID_KINDS: ReadonlySet<string> = new Set<StepKind>(['agent', 'script']);
@@ -116,7 +117,11 @@ function normalizeAndValidate(fm: Record<string, unknown>, filePath: string): Wo
   const ids = new Set<string>();
   const steps: WorkflowStep[] = rawSteps.map((s, i) => normalizeStep(s, i, ids));
 
-  // dependsOn 引用必须存在
+  // 数据引用 → 隐式依赖：把 {{steps.X.result}} / $WF_STEP_X_RESULT 引用并入 dependsOn，
+  // 保证「引用」与「依赖」永不脱节（否则被引用的 step 可能还没跑完就渲染成空串）。
+  inferDependencies(steps, ids);
+
+  // dependsOn 引用必须存在（含推断进来的——typo 在此处 fail loud，而非静默空渲染）
   for (const s of steps) {
     for (const d of s.dependsOn ?? []) {
       if (!ids.has(d)) throw new Error(`step "${s.id}" dependsOn unknown step "${d}"`);
@@ -125,12 +130,21 @@ function normalizeAndValidate(fm: Record<string, unknown>, filePath: string): Wo
   // 无环
   assertAcyclic(steps);
 
+  // workflow 级 guidance 会拼进每个 agent step，引用 step 会逼所有 agent step 依赖它（必成环）——禁止。
+  const guidance = str(fm.guidance);
+  if (extractTemplateStepRefs(guidance).length > 0) {
+    throw new Error(
+      'workflow-level guidance must not reference {{steps.*.result}} (it applies to every agent step); ' +
+      "move step-dependent text into a step's prompt/guidance",
+    );
+  }
+
   return {
     name,
     description: str(fm.description),
     version: str(fm.version),
     inputs: normalizeInputs(fm.inputs),
-    guidance: str(fm.guidance),
+    guidance,
     steps,
     filePath,
     source: 'user',
@@ -208,6 +222,38 @@ function normalizeInputs(raw: unknown): WorkflowInput[] | undefined {
       description: str(o.description),
     };
   });
+}
+
+/**
+ * 依赖推断：把每个 step 对其它 step 结果的「数据引用」并入它的 dependsOn（并集）。
+ *   - agent：扫 prompt / step 级 guidance 里的 {{steps.<id>.result}}（未知 id 立即报错）
+ *   - script：扫内联 run 里的 $WF_STEP_<SEG>_RESULT（按已知 id 正向匹配，envSegment 有损故不反推）
+ *
+ * 引用 = 必须等它跑完，所以并入 dependsOn 永远安全、不会引入伪依赖。
+ * 注：scriptFile（外部脚本文件）不扫描，其依赖须显式声明 dependsOn。
+ * 自引用（引用自己的 result）会在 assertAcyclic 处作为环报错。
+ */
+function inferDependencies(steps: WorkflowStep[], ids: Set<string>): void {
+  for (const s of steps) {
+    const deps = new Set<string>(s.dependsOn ?? []);
+
+    // agent: {{steps.X.result}} in prompt + step-level guidance
+    for (const id of [...extractTemplateStepRefs(s.prompt), ...extractTemplateStepRefs(s.guidance)]) {
+      if (!ids.has(id)) {
+        throw new Error(`step "${s.id}" references unknown step "${id}" (in prompt/guidance)`);
+      }
+      deps.add(id);
+    }
+
+    // script: $WF_STEP_<SEG>_RESULT in inline run（正向匹配每个已知 id 的段名）
+    if (s.kind === 'script' && s.run) {
+      for (const id of ids) {
+        if (id !== s.id && s.run.includes(`WF_STEP_${envSegment(id)}_RESULT`)) deps.add(id);
+      }
+    }
+
+    if (deps.size > 0) s.dependsOn = [...deps];
+  }
 }
 
 /** 拓扑环检测（DFS 三色） */

@@ -47,6 +47,11 @@ export class WorkflowService {
   constructor(opts: WorkflowServiceOpts) {
     this.registry = new WorkflowRegistry(opts.workflowsDir);
     this.store = new WorkflowRunStore(opts.workflowStatePath, opts.workflowRunsDir);
+    // 启动对账：上次进程留下的 running 孤儿 run（重启后绝不会再推进）标 interrupted
+    const orphaned = this.store.reconcileOrphans();
+    if (orphaned > 0) {
+      console.warn(`[WorkflowService] reconciled ${orphaned} interrupted run(s) left running by a previous process`);
+    }
     this.executor = new WorkflowExecutor({
       store: this.store,
       getPersona: opts.getPersona,
@@ -101,6 +106,11 @@ export class WorkflowService {
   /** 取消（最简：停止派发新 step，标 cancelled） */
   cancel(runId: string): boolean {
     return this.executor.cancel(runId);
+  }
+
+  /** 关停时调用：把内存里待落盘的 run 状态同步刷到磁盘 */
+  flush(): void {
+    this.store.flush();
   }
 
   /**
