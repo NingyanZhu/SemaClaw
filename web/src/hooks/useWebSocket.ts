@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, ImageAttachment, WorkbenchArtifact, WorkbenchState } from '../types';
+import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, ImageAttachment, WorkbenchArtifact, WorkbenchState, WorkflowDefSummary, WorkflowRun } from '../types';
 
 // ===== workbench 本地持久化（防止页面刷新丢失已 launch 的 UI tab）=====
 // 仅前端持久化：daemon 仍存活时刷新页面完全恢复；daemon 重启后旧的 backend
@@ -70,6 +70,21 @@ export interface WsHook {
   workbenchFetchLogs: (jid: string, artifactId: string, tailLines?: number) => Promise<string>;
   /** 把 history 里的 artifact 提到 current（纯前端状态切换） */
   workbenchSetCurrent: (jid: string, artifactId: string) => void;
+  // ===== Workflow（全局 dock） =====
+  /** 可用 workflow 定义（摘要） */
+  workflowDefs: WorkflowDefSummary[];
+  /** 所有 run（最新在前） */
+  workflowRuns: WorkflowRun[];
+  /** 最近一次触发错误（如缺 required input），由 panel 展示后可忽略 */
+  workflowError: string | null;
+  /** 触发一次 run */
+  workflowRun: (name: string, inputs: Record<string, string>) => void;
+  /** 取消一次 run */
+  workflowCancel: (runId: string) => void;
+  /** 无损编辑定义（workflow.guidance / step.guidance / step.timeout），写回 .md */
+  workflowEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number }) => void;
+  /** 主动刷新 defs + runs */
+  workflowRefresh: () => void;
 }
 
 export function useWebSocket(): WsHook {
@@ -83,6 +98,9 @@ export function useWebSocket(): WsHook {
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
   const [workbench, setWorkbench]             = useState<Record<string, WorkbenchState>>(() => loadWorkbench());
   const [workbenchLatest, setWorkbenchLatest] = useState<{ jid: string; artifactId: string; at: number } | null>(null);
+  const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefSummary[]>([]);
+  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>([]);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
 
   // 把 workbench 状态镜像到 localStorage，刷新页面后从 loadWorkbench() 恢复
   useEffect(() => {
@@ -121,6 +139,26 @@ export function useWebSocket(): WsHook {
     rawSend({ type: 'subscribe', groupJid: jid });
     subscribedRef.current.add(jid);
     setSubscribed(prev => new Set([...prev, jid]));
+  }, [rawSend]);
+
+  // ===== Workflow sends =====
+  const workflowRefresh = useCallback(() => {
+    rawSend({ type: 'workflow:list' });
+    rawSend({ type: 'workflow:runs' });
+  }, [rawSend]);
+
+  const workflowRun = useCallback((name: string, inputs: Record<string, string>) => {
+    setWorkflowError(null);
+    rawSend({ type: 'workflow:run', requestId: `wf-${Date.now()}`, name, inputs });
+  }, [rawSend]);
+
+  const workflowCancel = useCallback((runId: string) => {
+    rawSend({ type: 'workflow:cancel', runId });
+  }, [rawSend]);
+
+  const workflowEdit = useCallback((name: string, patch: { stepId?: string; guidance?: string; timeout?: number }) => {
+    setWorkflowError(null);
+    rawSend({ type: 'workflow:edit', requestId: `wfe-${Date.now()}`, name, ...patch });
   }, [rawSend]);
 
   const sendMessage = useCallback((jid: string, text: string, attachments?: ImageAttachment[]) => {
@@ -344,6 +382,8 @@ export function useWebSocket(): WsHook {
             setStatus('connected');
             retryCountRef.current = 0;
             rawSend({ type: 'list:groups' });
+            rawSend({ type: 'workflow:list' });
+            rawSend({ type: 'workflow:runs' });
             // Re-subscribe to all previously-subscribed groups after reconnect
             for (const jid of subscribedRef.current) {
               rawSend({ type: 'subscribe', groupJid: jid });
@@ -362,6 +402,28 @@ export function useWebSocket(): WsHook {
           }
           case 'subscribed':
             setSubscribed(prev => new Set([...prev, msg.groupJid as string]));
+            break;
+          case 'workflow:defs':
+            setWorkflowDefs((msg.defs as WorkflowDefSummary[]) ?? []);
+            break;
+          case 'workflow:runs':
+            setWorkflowRuns((msg.runs as WorkflowRun[]) ?? []);
+            break;
+          case 'workflow:update': {
+            const run = msg.run as WorkflowRun | undefined;
+            if (run) setWorkflowRuns(prev => {
+              const idx = prev.findIndex(r => r.id === run.id);
+              if (idx === -1) return [run, ...prev];
+              const next = [...prev]; next[idx] = run; return next;
+            });
+            break;
+          }
+          case 'workflow:run:started':
+            if (msg.error) setWorkflowError(String(msg.error));
+            break;
+          case 'workflow:edit:response':
+            if (msg.error) setWorkflowError(String(msg.error));
+            else { rawSend({ type: 'workflow:list' }); }  // 成功 → 重新拉 defs 反映新值
             break;
           case 'chat:history': {
             // 服务端在 subscribe 时回放当前 session 的完整文本历史，
@@ -636,5 +698,6 @@ export function useWebSocket(): WsHook {
     dispatchParents, agentTodos, subscribeAll,
     workbench, workbenchLatest, workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs,
     workbenchSetCurrent,
+    workflowDefs, workflowRuns, workflowError, workflowRun, workflowCancel, workflowEdit, workflowRefresh,
   };
 }

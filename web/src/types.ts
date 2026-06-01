@@ -162,3 +162,52 @@ export interface WorkbenchState {
   current: WorkbenchArtifact | null;
   history: WorkbenchArtifact[];  // 不含 current（current 单独存）
 }
+
+// ===== Workflow（独立 dock，全局；镜像后端 src/workflow/types.ts） =====
+
+export interface WorkflowDefSummary {
+  name: string;
+  description?: string;
+  stepCount: number;
+  inputs: { name: string; required?: boolean; default?: string }[];
+  /** workflow 级 guidance（可编辑） */
+  guidance?: string;
+  /** 各 step 的 def 模板原始值（可编辑，非 run 渲染快照） */
+  steps: { id: string; kind: 'agent' | 'script'; guidance?: string; timeout?: number }[];
+}
+
+export type WfStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+export type WorkflowRunStatus = 'running' | 'done' | 'partial-failed' | 'cancelled';
+
+export interface WfObserveOutput {
+  label: string;
+  as: 'inline' | 'artifact';
+  content?: string;
+  artifactPath?: string;
+}
+
+export interface WorkflowStepRun {
+  id: string;
+  kind: 'agent' | 'script';
+  persona?: string;
+  dependsOn?: string[];
+  status: WfStepStatus;
+  result: string;
+  error?: string;
+  observe?: WfObserveOutput;
+  guidanceSnapshot?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowName: string;
+  inputs: Record<string, string>;
+  status: WorkflowRunStatus;
+  runDir: string;
+  steps: WorkflowStepRun[];
+  trigger?: string;
+  createdAt: string;
+  completedAt?: string;
+}

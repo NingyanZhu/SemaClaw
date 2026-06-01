@@ -37,6 +37,7 @@ if (!subcommand || subcommand === 'start') {
   subcommand === 'clawhub' ||
   subcommand === 'wiki' ||
   subcommand === 'channel' ||
+  subcommand === 'workflow' ||
   subcommand === 'agent-task'
 ) {
   runCLI().catch((err: unknown) => {
@@ -112,6 +113,31 @@ async function runCLI(): Promise<void> {
     .action(async (name: string) => {
       const { cmdSkillsEnable } = await import('./cli/commands/skills.js')
       await cmdSkillsEnable(name)
+    })
+
+  // ============================================================
+  // semaclaw workflow
+  // ============================================================
+
+  const workflow = program.command('workflow').description('Run and manage reusable workflows')
+
+  workflow
+    .command('list')
+    .description('List available workflow definitions')
+    .option('--json', 'Output as JSON')
+    .action(async (opts: { json?: boolean }) => {
+      const { cmdWorkflowList } = await import('./cli/commands/workflow.js')
+      cmdWorkflowList(opts)
+    })
+
+  workflow
+    .command('run <name>')
+    .description('Run a workflow by name')
+    .option('-i, --input <kv>', 'Input as key=value (repeatable)', (v: string, acc: string[]) => { acc.push(v); return acc }, [] as string[])
+    .option('--json', 'Output the full run record as JSON')
+    .action(async (name: string, opts: { input?: string[]; json?: boolean }) => {
+      const { cmdWorkflowRun } = await import('./cli/commands/workflow.js')
+      await cmdWorkflowRun(name, opts)
     })
 
   // ============================================================

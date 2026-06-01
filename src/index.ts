@@ -57,6 +57,7 @@ import { WebSocketGateway } from './gateway/WebSocketGateway';
 import { UIServer } from './gateway/UIServer';
 import { DispatchBridge } from './agent/DispatchBridge';
 import { PersonaRegistry } from './agent/PersonaRegistry';
+import { WorkflowService } from './workflow/WorkflowService';
 import { VirtualWorkerPool } from './agent/VirtualWorkerPool';
 import { installBuiltinPersonas } from './subagents/builtin-personas';
 import { WikiManager } from './wiki/WikiManager';
@@ -424,6 +425,18 @@ async function main(): Promise<void> {
   messageRouter.setOnJidMigrated((oldJid, newBinding) => {
     wsGateway.notifyGroupMigrated(oldJid, newBinding);
   });
+
+  // ===== Workflow（独立 executor，只跑隔离 session；触发 UI/CLI/定时，与 AgentPool/DispatchBridge 零耦合） =====
+  const workflowService = new WorkflowService({
+    workflowsDir: config.paths.workflowsDir,
+    workflowStatePath: config.paths.workflowStatePath,
+    workflowRunsDir: config.paths.workflowRunsDir,
+    workflowDataDir: config.paths.workflowDataDir,
+    getPersona: (n) => personaRegistry.get(n),
+  });
+  workflowService.setWsNotify(run => wsGateway.notifyWorkflowUpdate(run));
+  wsGateway.setWorkflowService(workflowService);
+  console.log('[SemaClaw] WorkflowService ready');
 
   const wikiManager = new WikiManager(config.paths.wikiDir);
   await wikiManager.ensureInit();

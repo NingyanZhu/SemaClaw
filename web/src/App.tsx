@@ -4,10 +4,12 @@ import { ChatView } from './components/ChatView';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AgentConsole } from './components/AgentConsole';
 import { Workbench } from './components/Workbench';
+import { WorkflowPanel } from './components/WorkflowPanel';
 import { DockBadges } from './components/DockBadges';
 import { useWebSocket } from './hooks/useWebSocket';
 
-type ExpandedDock = 'agent' | 'workbench' | null;
+type ExpandedDock = 'agent' | 'workbench' | 'workflow' | null;
+type DockKind = 'agent' | 'workbench' | 'workflow';
 
 export function App() {
   const [selectedJid, setSelectedJid]   = useState<string | null>(null);
@@ -16,7 +18,7 @@ export function App() {
   /** 用户手动收起后，本次 workbenchLatest 不再触发抢前台 */
   const [suppressedLatestAt, setSuppressedLatestAt] = useState<number | null>(null);
   const ws = useWebSocket();
-  const { dispatchParents, agentTodos, subscribeAll, workbench, workbenchLatest, workbenchReadFile, workbenchClose, workbenchMarkViewed, workbenchSetCurrent } = ws;
+  const { dispatchParents, agentTodos, subscribeAll, workbench, workbenchLatest, workbenchReadFile, workbenchClose, workbenchMarkViewed, workbenchSetCurrent, workflowDefs, workflowRuns, workflowError, workflowRun, workflowCancel, workflowEdit, workflowRefresh } = ws;
 
   // When dispatch is active, subscribe to all agents to receive their permission/todo events
   useEffect(() => {
@@ -43,6 +45,11 @@ export function App() {
     if (workbenchLatest.jid !== selectedJid) return; // 仅当事件所属 jid 是当前选中群组时弹
     setExpandedDock('workbench');
   }, [workbenchLatest, suppressedLatestAt, selectedJid]);
+
+  // 打开 workflow dock 时刷新 defs+runs（workflow 常由 agent/CLI 在别处创建/触发）
+  useEffect(() => {
+    if (expandedDock === 'workflow') workflowRefresh();
+  }, [expandedDock, workflowRefresh]);
 
   const handleSelect = (jid: string) => {
     setSelectedJid(jid);
@@ -77,7 +84,7 @@ export function App() {
 
   // ExpandedDock 互斥控制
   const setAgentExpanded = useCallback(() => setExpandedDock('agent'), []);
-  const collapseDock = useCallback((which: 'agent' | 'workbench') => {
+  const collapseDock = useCallback((which: DockKind) => {
     setExpandedDock(null);
     if (which === 'workbench' && workbenchLatest) {
       // 抑制本次 latest 的二次抢前台
@@ -86,7 +93,7 @@ export function App() {
   }, [workbenchLatest]);
 
   /** Dock badge toggle：点击 active 收起，点击 inactive 切换 */
-  const onToggleDock = useCallback((which: 'agent' | 'workbench') => {
+  const onToggleDock = useCallback((which: DockKind) => {
     setExpandedDock(prev => {
       if (prev === which) {
         if (which === 'workbench' && workbenchLatest) {
@@ -169,6 +176,17 @@ export function App() {
         markViewed={wbMarkViewed}
       />
 
+      <WorkflowPanel
+        expanded={expandedDock === 'workflow'}
+        onCollapse={() => collapseDock('workflow')}
+        defs={workflowDefs}
+        runs={workflowRuns}
+        error={workflowError}
+        onRun={workflowRun}
+        onCancel={workflowCancel}
+        onEdit={workflowEdit}
+      />
+
       <DockBadges
         expanded={expandedDock}
         onToggle={onToggleDock}
@@ -177,6 +195,7 @@ export function App() {
         messages={ws.messages}
         groups={ws.groups}
         workbenchState={workbenchState}
+        workflowRuns={workflowRuns}
       />
     </div>
   );

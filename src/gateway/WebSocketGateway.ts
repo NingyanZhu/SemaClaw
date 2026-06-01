@@ -63,6 +63,8 @@ import type {
   WorkbenchServiceStoppedPayload,
 } from '../agent/WorkbenchBridge';
 import type { DispatchParent } from '../agent/DispatchBridge';
+import type { WorkflowService, WorkflowDefSummary } from '../workflow/WorkflowService';
+import type { WorkflowRun } from '../workflow/types';
 
 // ===== 内部类型 =====
 
@@ -108,6 +110,12 @@ type OutboundMsg =
   | ({ type: 'workbench:service_stopped'; groupJid: string } & WorkbenchServiceStoppedPayload)
   | { type: 'workbench:read_file:response'; requestId: string; content?: string; error?: string }
   | { type: 'workbench:fetch_logs:response'; requestId: string; content: string }
+  | { type: 'workflow:update'; run: WorkflowRun }
+  | { type: 'workflow:defs'; defs: WorkflowDefSummary[] }
+  | { type: 'workflow:runs'; runs: WorkflowRun[] }
+  | { type: 'workflow:run:started'; requestId: string; runId?: string; error?: string }
+  | { type: 'workflow:get:response'; requestId: string; run: WorkflowRun | null }
+  | { type: 'workflow:edit:response'; requestId: string; ok?: boolean; error?: string }
   | { type: 'error'; message: string };
 
 interface GroupInfo {
@@ -152,6 +160,7 @@ export class WebSocketGateway {
   private ensureFeishuChannelFn: (() => Promise<import('../types').IChannel | null>) | null = null;
   private getDispatchParents: (() => DispatchParent[]) | null = null;
   private getAgentTodos: (() => Map<string, { agentName: string; todos: { content: string; status: string; activeForm?: string }[] }>) | null = null;
+  private workflowService: WorkflowService | null = null;
   /** jid → 最后已知 agent state，subscribe/reconnect 时推送给新客户端 */
   private lastKnownStates = new Map<string, string>();
 
@@ -346,6 +355,15 @@ export class WebSocketGateway {
   /** 注入 AgentPool 当前 todos 获取函数，用于新 admin 客户端连接时初始推送 */
   setAgentTodosGetter(fn: () => Map<string, { agentName: string; todos: { content: string; status: string; activeForm?: string }[] }>): void {
     this.getAgentTodos = fn;
+  }
+
+  /** WorkflowExecutor 状态变化时调用，推给所有已认证客户端（workflow dock 是全局面板，run 不绑 group） */
+  notifyWorkflowUpdate(run: WorkflowRun): void {
+    this.broadcastToAll({ type: 'workflow:update', run });
+  }
+
+  setWorkflowService(svc: WorkflowService): void {
+    this.workflowService = svc;
   }
 
   // ===== 内部实现 =====
@@ -881,6 +899,74 @@ export class WebSocketGateway {
           requestId,
           content,
         });
+        return;
+      }
+
+      // ===== workflow（dock 全局面板；run 不绑 group，触发只 UI/CLI/定时） =====
+      case 'workflow:list': {
+        if (!this.requireAuth(client)) return;
+        this.send(client, { type: 'workflow:defs', defs: this.workflowService?.listDefs() ?? [] });
+        return;
+      }
+
+      case 'workflow:runs': {
+        if (!this.requireAuth(client)) return;
+        this.send(client, { type: 'workflow:runs', runs: this.workflowService?.listRuns() ?? [] });
+        return;
+      }
+
+      case 'workflow:get': {
+        if (!this.requireAuth(client)) return;
+        const requestId = String(msg.requestId ?? '');
+        const runId = String(msg.runId ?? '');
+        this.send(client, { type: 'workflow:get:response', requestId, run: this.workflowService?.getRun(runId) ?? null });
+        return;
+      }
+
+      case 'workflow:run': {
+        if (!this.requireAuth(client)) return;
+        const requestId = String(msg.requestId ?? '');
+        const name = String(msg.name ?? '');
+        const inputs = (msg.inputs && typeof msg.inputs === 'object')
+          ? msg.inputs as Record<string, string>
+          : {};
+        if (!name) {
+          this.send(client, { type: 'workflow:run:started', requestId, error: 'name required' });
+          return;
+        }
+        if (!this.workflowService) {
+          this.send(client, { type: 'workflow:run:started', requestId, error: 'workflow service not ready' });
+          return;
+        }
+        const res = this.workflowService.startRun(name, inputs, 'ui');
+        this.send(client, 'error' in res
+          ? { type: 'workflow:run:started', requestId, error: res.error }
+          : { type: 'workflow:run:started', requestId, runId: res.runId });
+        return;
+      }
+
+      case 'workflow:cancel': {
+        if (!this.requireAuth(client)) return;
+        const runId = String(msg.runId ?? '');
+        this.workflowService?.cancel(runId);
+        return;
+      }
+
+      case 'workflow:edit': {
+        if (!this.requireAuth(client)) return;
+        const requestId = String(msg.requestId ?? '');
+        const name = String(msg.name ?? '');
+        const stepId = msg.stepId !== undefined && msg.stepId !== null ? String(msg.stepId) : undefined;
+        const guidance = msg.guidance !== undefined && msg.guidance !== null ? String(msg.guidance) : undefined;
+        const timeout = typeof msg.timeout === 'number' ? msg.timeout : undefined;
+        if (!name || !this.workflowService) {
+          this.send(client, { type: 'workflow:edit:response', requestId, error: 'name required / service not ready' });
+          return;
+        }
+        const res = this.workflowService.editStep(name, { stepId, guidance, timeout });
+        this.send(client, 'error' in res
+          ? { type: 'workflow:edit:response', requestId, error: res.error }
+          : { type: 'workflow:edit:response', requestId, ok: true });
         return;
       }
 

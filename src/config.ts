@@ -165,6 +165,31 @@ export const config = {
       envOptional('SEMACLAW_VIRTUAL_AGENTS_DIR', path.join(semaclawHome, 'virtual-agents'))
     ),
     /**
+     * ${home}/workflows — 用户自定义 workflow 定义（*.md），WorkflowRegistry 扫描
+     */
+    workflowsDir: path.resolve(
+      envOptional('SEMACLAW_WORKFLOWS_DIR', path.join(semaclawHome, 'workflows'))
+    ),
+    /**
+     * ${configHome}/workflow-runs.json — workflow run 状态/历史
+     */
+    workflowStatePath: path.resolve(
+      envOptional('SEMACLAW_WORKFLOW_STATE_PATH', path.join(semaclawConfigHome, 'workflow-runs.json'))
+    ),
+    /**
+     * ${home}/workflow-runs/<runId>/ — 每次 workflow run 的共享 workspace 目录（每 run 全新，临时）
+     */
+    workflowRunsDir: path.resolve(
+      envOptional('SEMACLAW_WORKFLOW_RUNS_DIR', path.join(semaclawHome, 'workflow-runs'))
+    ),
+    /**
+     * ${home}/workflow-data/<name>/ — 每个 workflow 的持久目录（跨 run 保留：venv/缓存/累积输出）
+     * → script step 通过 WF_WORKFLOW_DIR 访问
+     */
+    workflowDataDir: path.resolve(
+      envOptional('SEMACLAW_WORKFLOW_DATA_DIR', path.join(semaclawHome, 'workflow-data'))
+    ),
+    /**
      * ${configHome}/semaclaw-model.conf — sema-core 模型配置文件路径
      * 通过 setModelConfigPathOverride 注入，使所有 CLI 子命令与 daemon 共享同一份。
      */
@@ -191,6 +216,7 @@ export const config = {
       workspaceDir: !!process.env.WORKSPACE_DIR,
       wikiDir: !!process.env.WIKI_DIR,
       virtualAgentsDir: !!process.env.SEMACLAW_VIRTUAL_AGENTS_DIR,
+      workflowsDir: !!process.env.SEMACLAW_WORKFLOWS_DIR,
       dbPath: !!process.env.DB_PATH,
       globalConfigPath: !!process.env.SEMACLAW_CONFIG_PATH,
       dispatchStatePath: !!process.env.SEMACLAW_DISPATCH_STATE_PATH,

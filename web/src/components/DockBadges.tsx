@@ -1,9 +1,11 @@
-import type { DispatchParent, AgentTodosEntry, ChatMessage, GroupInfo, PermissionMessage, WorkbenchState } from '../types';
+import type { DispatchParent, AgentTodosEntry, ChatMessage, GroupInfo, PermissionMessage, WorkbenchState, WorkflowRun } from '../types';
 import { useMemo } from 'react';
 
+type DockKind = 'agent' | 'workbench' | 'workflow';
+
 interface Props {
-  expanded: 'agent' | 'workbench' | null;
-  onToggle: (which: 'agent' | 'workbench') => void;
+  expanded: DockKind | null;
+  onToggle: (which: DockKind) => void;
   // AgentConsole badge data
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>;
@@ -11,6 +13,8 @@ interface Props {
   groups: GroupInfo[];
   // Workbench badge data
   workbenchState: WorkbenchState | null;
+  // Workflow badge data
+  workflowRuns: WorkflowRun[];
 }
 
 export function DockBadges(p: Props) {
@@ -32,6 +36,10 @@ export function DockBadges(p: Props) {
   const wbCurrent = p.workbenchState?.current ?? null;
   const wbHasRunning = p.workbenchState?.history.some(h => h.process?.status === 'running') ?? false;
 
+  // ===== Workflow 信号 =====
+  const wfRunning = p.workflowRuns.some(r => r.status === 'running');
+  const wfHasRuns = p.workflowRuns.length > 0;
+
   return (
     <div className="flex flex-col items-center gap-3 w-10 flex-shrink-0 border-l border-gray-100 py-3 bg-white">
       <BadgeButton
@@ -49,6 +57,14 @@ export function DockBadges(p: Props) {
         icon={<MonitorIcon />}
         countBadge={null}
         dot={wbCurrent ? 'info' : wbHasRunning ? 'live' : null}
+      />
+      <BadgeButton
+        active={p.expanded === 'workflow'}
+        onClick={() => p.onToggle('workflow')}
+        title="Workflow"
+        icon={<FlowIcon />}
+        countBadge={null}
+        dot={wfRunning ? 'live' : wfHasRuns ? 'info' : null}
       />
     </div>
   );
@@ -115,6 +131,29 @@ function MonitorIcon() {
       <rect x="3" y="4" width="18" height="13" rx="1.2" />
       <path d="M9 21h6" />
       <path d="M12 17v4" />
+    </svg>
+  );
+}
+
+function FlowIcon() {
+  // 竖向分层 DAG 缩影：顶部两节点并行 → 汇聚到底部一个
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3" y="3" width="7" height="5" rx="1" />
+      <rect x="14" y="3" width="7" height="5" rx="1" />
+      <rect x="8.5" y="16" width="7" height="5" rx="1" />
+      <path d="M6.5 8v3.5h11V8" />
+      <path d="M12 11.5V16" />
     </svg>
   );
 }

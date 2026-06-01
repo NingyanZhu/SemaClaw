@@ -55,6 +55,7 @@
     "simple-git": "^3.36.0",
     "sqlite-vec": "^0.1.7-alpha.2",
     "ws": "^8.19.0",
+    "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
   "optionalDependencies": {
