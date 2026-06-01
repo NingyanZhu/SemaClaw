@@ -175,7 +175,9 @@ semaclaw workflow run market-research -i topic=本地大模型 -i depth=deep
 semaclaw workflow run market-research -i topic=X --json    # 完整 run 记录 JSON
 ```
 
-`run` 跑通后会打印每个 step 的状态、result 预览、observe，并在 `~/semaclaw/workflow-runs/<runId>/` 留下该次 run 的 workspace。
+`run` 跑通后会打印每个 step 的状态、result 预览、observe，并在 `~/semaclaw/workflow-runs/<runId>/` 留下该次 run 的 workspace（runId = `<workflow 名>-<NNNN>`，按 workflow 单调编号）。
+
+**历史保留**：每个 workflow 各留最近 **10 条** run，超出的最旧 run 连同其 workspace 目录一起清掉；没写任何文件的 run 结束后不留空目录。需要跨 run 保留的产物请写到 `WF_WORKFLOW_DIR`（持久），别依赖 `WF_RUN_DIR`（每 run 全新、会被回收）。
 
 ## Constraints & gotchas
 

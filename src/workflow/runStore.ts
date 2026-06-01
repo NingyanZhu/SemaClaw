@@ -8,6 +8,9 @@
  *   - 落盘策略：运行中的中间态防抖批量写（FLUSH_DEBOUNCE_MS）；run 进入终态立即同步写
  *     （保证已完成 run 不丢）。tmp+rename 原子落盘。
  *   - 单写者 + 内存权威 → 消除并发 run 的 load-modify-write lost-update 竞态。
+ *   - id = `<workflow 名>-<NNNN>`，NNNN 为该 workflow 的单调序号（max+1，抗碰撞）。
+ *   - 保留策略：**每个 workflow 各留最近 PER_WORKFLOW_CAP 条**；超出的最旧 run 连同其
+ *     workspace 目录一起 GC，避免 workflow-runs 子目录无限堆积。
  *   - 每 run 一个 workspace 目录：<runsDir>/<runId>/（含 .observe 子目录）。
  */
 
@@ -15,8 +18,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { WorkflowRun } from './types';
 
-/** 历史保留上限（超出丢最旧） */
-const HISTORY_CAP = 200;
+/** 每个 workflow 保留的历史 run 条数（超出丢最旧 + GC 目录） */
+const PER_WORKFLOW_CAP = 10;
 /** 运行中中间态的防抖落盘间隔 */
 const FLUSH_DEBOUNCE_MS = 400;
 
@@ -25,19 +28,24 @@ export class WorkflowRunStore {
   private runs: WorkflowRun[] = [];
   /** id → run（与 runs 持同一对象引用），O(1) 查询/upsert */
   private readonly byId = new Map<string, WorkflowRun>();
+  /** id 前缀 → 已分配的最大序号（单调，永不回退；按需从盘上 runs 懒播种） */
+  private readonly seqByPrefix = new Map<string, number>();
   private flushTimer: NodeJS.Timeout | null = null;
+  private readonly perWorkflowCap: number;
 
   constructor(
     private readonly statePath: string,
     private readonly runsDir: string,
+    perWorkflowCap = PER_WORKFLOW_CAP,
   ) {
+    this.perWorkflowCap = perWorkflowCap;
     this.runs = this.readFromDisk();
     for (const r of this.runs) this.byId.set(r.id, r);
   }
 
   /** 创建一次新 run（分配 id + 建 workspace 目录），状态 running、steps 空，未持久化 */
   newRun(workflowName: string, inputs: Record<string, string>, trigger?: string): WorkflowRun {
-    const id = this.allocateId();
+    const id = this.allocateId(workflowName);
     const runDir = path.join(this.runsDir, id);
     fs.mkdirSync(path.join(runDir, '.observe'), { recursive: true });
     return {
@@ -64,11 +72,7 @@ export class WorkflowRunStore {
     }
     this.byId.set(run.id, run);
 
-    // cap：从尾部丢最旧
-    while (this.runs.length > HISTORY_CAP) {
-      const dropped = this.runs.pop()!;
-      if (this.byId.get(dropped.id) === dropped) this.byId.delete(dropped.id);
-    }
+    this.enforceCap(run.workflowName);
 
     if (run.status === 'running') this.scheduleFlush();
     else this.flush(); // 终态：立即落盘，确保已完成 run 不丢
@@ -122,13 +126,50 @@ export class WorkflowRunStore {
 
   // ===== Internal =====
 
-  /** wf-YYYYMMDD-NNNN，NNNN = 当天已有 run 数 + 1 */
-  private allocateId(): string {
-    const d = new Date();
-    const date = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
-    const prefix = `wf-${date}-`;
-    const todayCount = this.runs.filter(r => r.id.startsWith(prefix)).length;
-    return `${prefix}${String(todayCount + 1).padStart(4, '0')}`;
+  /**
+   * id = `<sanitized workflow 名>-<NNNN>`，NNNN = 该前缀单调序号 + 1。
+   * 用内存计数器（不只看 this.runs，因 newRun 此刻尚未 persist）；首次按需从盘上 runs
+   * 播种最大值，之后只增不减 —— 故淘汰最旧 run 后也绝不回退、不碰撞。
+   */
+  private allocateId(workflowName: string): string {
+    const prefix = `${sanitizeName(workflowName)}-`;
+    let last = this.seqByPrefix.get(prefix);
+    if (last === undefined) {
+      last = 0;
+      for (const r of this.runs) {
+        if (!r.id.startsWith(prefix)) continue;
+        const n = parseInt(r.id.slice(prefix.length), 10);
+        if (Number.isFinite(n) && n > last) last = n;
+      }
+    }
+    const next = last + 1;
+    this.seqByPrefix.set(prefix, next);
+    return `${prefix}${String(next).padStart(4, '0')}`;
+  }
+
+  /** 把某 workflow 的历史 run 截到最近 perWorkflowCap 条，超出的最旧 run + 其目录一起 GC */
+  private enforceCap(workflowName: string): void {
+    let kept = 0;
+    for (let i = 0; i < this.runs.length; ) {
+      const r = this.runs[i];
+      if (r.workflowName !== workflowName) { i++; continue; }
+      kept++;
+      if (kept > this.perWorkflowCap) {
+        this.runs.splice(i, 1);
+        if (this.byId.get(r.id) === r) this.byId.delete(r.id);
+        this.removeRunDir(r);
+        // 不自增 i：splice 后当前位是下一条
+      } else {
+        i++;
+      }
+    }
+  }
+
+  /** 删除一个 run 的 workspace 目录（仅限确实在 runsDir 下的，best-effort 异步） */
+  private removeRunDir(run: WorkflowRun): void {
+    const dir = run.runDir;
+    if (!dir || !dir.startsWith(this.runsDir)) return;
+    fs.rm(dir, { recursive: true, force: true }, () => { /* best-effort */ });
   }
 
   private scheduleFlush(): void {
@@ -159,6 +200,7 @@ export class WorkflowRunStore {
   }
 }
 
-function pad2(n: number): string {
-  return String(n).padStart(2, '0');
+/** workflow 名 → 安全 id/目录段（非字母数字._- 转下划线） */
+function sanitizeName(name: string): string {
+  return name.replace(/[^A-Za-z0-9._-]/g, '_');
 }

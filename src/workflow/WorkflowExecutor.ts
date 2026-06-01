@@ -143,6 +143,9 @@ export class WorkflowExecutor {
         }
         run.completedAt = now();
         this.activeRuns.delete(run.id);
+        // 没写任何文件的 run（纯 agent 推理 / echo 类）不留空目录；取消的 run 可能还有在跑的
+        // step 在写盘，跳过清理以免拔掉它脚下的 cwd。
+        if (!control.cancelled) cleanupEmptyRunDir(run.runDir);
         this.emit(run);
         resolve(run);
       };
@@ -279,6 +282,21 @@ function captureObserve(spec: ObserveSpec, result: string, runDir: string): Obse
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/** run 结束后若 workspace 实质为空（无文件，.observe 也空）则删掉，避免堆一堆空目录 */
+function cleanupEmptyRunDir(runDir: string): void {
+  try {
+    const entries = fs.readdirSync(runDir);
+    const empty =
+      entries.length === 0 ||
+      (entries.length === 1 &&
+        entries[0] === '.observe' &&
+        fs.readdirSync(path.join(runDir, '.observe')).length === 0);
+    if (empty) fs.rmSync(runDir, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** workflow 名 → 安全目录名 */
