@@ -10,6 +10,7 @@
  */
 
 import { spawn } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { runOneShot } from '../agent/IsolatedRunner';
 import { render, buildScriptEnv } from './template';
@@ -17,6 +18,11 @@ import type { PersonaConfig } from '../agent/PersonaRegistry';
 import type { WorkflowDef, WorkflowStep, RenderContext } from './types';
 
 interface ExecErr extends Error { stdout?: string; stderr?: string }
+
+/** script result 超过此长度（字符）就落盘，避免撑爆下游 env(ARG_MAX) 与 run 记录 */
+const RESULT_SPILL_THRESHOLD = 5000;
+/** 落盘后 result 里保留的预览字符数 */
+const RESULT_PREVIEW_CHARS = 300;
 
 interface ShellOpts {
   cwd: string;
@@ -197,15 +203,41 @@ export async function runScriptStep(
       timeoutMs: (step.timeout ?? 600) * 1000,
       maxBuffer: SCRIPT_MAX_BUFFER,
     }, signal);
-    return { result: stdout.trim(), failed: false };
+    return { result: spillLargeResult(stdout.trim(), ctx.runDir, step.id), failed: false };
   } catch (e: unknown) {
     const err = e as { stdout?: string; stderr?: string; message?: string };
     const aborted = signal?.aborted === true;
     return {
-      result: (err.stdout ?? '').trim(),
+      result: spillLargeResult((err.stdout ?? '').trim(), ctx.runDir, step.id),
       failed: true,
       aborted,
       error: aborted ? 'cancelled' : (err.stderr?.trim() || err.message || 'script failed'),
     };
   }
+}
+
+/**
+ * result 超过阈值就把**完整内容**写到 <runDir>/.results/<stepId>.txt，
+ * result 改为「指针(路径+总长) + 前 N 字符预览」。
+ * 这样 {{steps.x.result}} / WF_STEP_x_RESULT 注入下游时不会撑爆 env，run 记录也保持精简；
+ * 需要完整数据的下游脚本/agent 按 result 里的路径去读文件。
+ */
+function spillLargeResult(result: string, runDir: string, stepId: string): string {
+  if (result.length <= RESULT_SPILL_THRESHOLD) return result;
+  const preview = result.slice(0, RESULT_PREVIEW_CHARS);
+  try {
+    const dir = path.join(runDir, '.results');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${sanitizeStepId(stepId)}.txt`);
+    fs.writeFileSync(file, result, 'utf-8');
+    return `[truncated: ${result.length} chars total; full output saved to ${file}]\n${preview}…`;
+  } catch {
+    // 落盘失败也至少截断，绝不把超长串塞进 env / run 记录
+    return `[truncated: ${result.length} chars total]\n${preview}…`;
+  }
+}
+
+/** step id → 安全文件名段 */
+function sanitizeStepId(id: string): string {
+  return id.replace(/[^A-Za-z0-9._-]/g, '_');
 }

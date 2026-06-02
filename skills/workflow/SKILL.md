@@ -91,6 +91,8 @@ Two channels:
 1. **`result` string** — every step produces a `result` (agent = final message, script = stdout). Reference it downstream with `{{steps.<id>.result}}`.
 2. **Shared run workspace** — one dir per run; both agent (`workingDir`) and script (`cwd`) point at it. Pass real files/data here (script writes `data.csv` → agent reads it).
 
+**Large script results auto-spill.** If a script's result exceeds ~5000 chars, the full output is written to `<run>/.results/<stepId>.txt` and `result` becomes a pointer line (`[truncated: N chars total; full output saved to <path>]`) plus a 300-char preview. This keeps downstream env (`WF_STEP_*_RESULT`) and the run record small. If a downstream step needs the **full** data, read the file at that path — or better, have the producer write to a known file under `WF_RUN_DIR` and pass the path explicitly rather than relying on a huge `result`.
+
 **Templating** (agent `prompt` / `guidance`): `{{input.<name>}}` and `{{steps.<id>.result}}` — plain substitution, no logic.
 
 **Data refs auto-create dependencies.** Referencing a step's result — `{{steps.X.result}}` in a prompt/guidance, or `$WF_STEP_X_RESULT` in an inline `run` — automatically adds `X` to that step's `dependsOn` (union with whatever you declared). So a ref and its dependency can never drift out of sync, and you rarely need to write `dependsOn` by hand. Caveats: referencing a non-existent step is a load error (fails loud, not a silent empty); `scriptFile` bodies aren't scanned, so declare their `dependsOn` explicitly; `{{steps.*}}` is **not** allowed in workflow-level `guidance` (it applies to every agent step).
