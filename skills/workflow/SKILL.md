@@ -32,6 +32,7 @@ inputs:                               # run-time parameters
   - { name: depth, default: "standard" }
 guidance: |                           # workflow-level rules, applied to ALL agent steps
   全程用中文；回答精炼，给依据。
+# workspace: ~/research/llm          # optional: custom workspace dir (default ~/semaclaw/workflow-data/<name>/)
 steps:
   - id: research_tech                 # unique id; referenced by {{steps.research_tech.result}}
     kind: agent
@@ -50,7 +51,7 @@ steps:
 
   - id: fetch_metrics
     kind: script
-    run: |                            # 用系统已装工具（cwd=本 run 的空目录，但 PATH/工具都在）
+    run: |                            # 用系统已装工具（cwd=本 workflow 的持久 workspace，PATH/工具都在）
       curl -s "https://api.example.com/price?q=$WF_INPUT_TOPIC" > "$WF_RUN_DIR/metrics.json"
       echo fetched
     observe: { label: "原始指标", from: { file: metrics.json }, as: artifact }
@@ -89,7 +90,7 @@ steps:
 Two channels:
 
 1. **`result` string** — every step produces a `result` (agent = final message, script = stdout). Reference it downstream with `{{steps.<id>.result}}`.
-2. **Shared run workspace** — one dir per run; both agent (`workingDir`) and script (`cwd`) point at it. Pass real files/data here (script writes `data.csv` → agent reads it).
+2. **Shared workspace** — one persistent dir **per workflow** (not per run); every step's cwd. Pass real files/data here (script writes `data.csv` → agent reads it); it also carries state across runs (see below).
 
 **Large script results auto-spill.** If a script's result exceeds ~5000 chars, the full output is written to `<run>/.results/<stepId>.txt` and `result` becomes a pointer line (`[truncated: N chars total; full output saved to <path>]`) plus a 300-char preview. This keeps downstream env (`WF_STEP_*_RESULT`) and the run record small. If a downstream step needs the **full** data, read the file at that path — or better, have the producer write to a known file under `WF_RUN_DIR` and pass the path explicitly rather than relying on a huge `result`.
 
@@ -100,23 +101,24 @@ Two channels:
 **Script env vars** (scripts don't get `{{}}` — they read env, safer):
 - `WF_INPUT_<NAME>` — each run input (name upper-cased)
 - `WF_STEP_<ID>_RESULT` — each completed upstream step's result
-- `WF_RUN_DIR` — this run's workspace (**fresh & empty every run** — see below)
-- `WF_WORKFLOW_DIR` — this workflow's **persistent** dir (survives across runs)
-- `WF_OBSERVE_DIR` — observe scratch dir
+- `WF_RUN_DIR` — the workspace (see below) — **same dir as `WF_WORKFLOW_DIR`**
+- `WF_WORKFLOW_DIR` — the workspace (alias of `WF_RUN_DIR`)
+- `WF_OBSERVE_DIR` — observe scratch dir (`<workspace>/.observe`)
 
 ## Working directory & files (important)
 
-Every step's **cwd is `WF_RUN_DIR`**, which is **brand-new and empty on each run** (`~/semaclaw/workflow-runs/<runId>/`). Implications — read these before writing scripts:
+Every step's **cwd is the workspace**, which is **one persistent directory per workflow, shared across all runs** — `~/semaclaw/workflow-data/<name>/` by default (override with the `workspace` field, or in the dock before a run). Think of it as a continuing project folder, not a throwaway scratch dir. `WF_RUN_DIR` and `WF_WORKFLOW_DIR` both point here. Implications — read before writing scripts:
 
-- **It is NOT a sandbox.** The host environment is inherited: `PATH`, system `python3`/`node`/`curl`, and anything already installed all work. The *only* thing that's empty is the cwd's files. "No environment" is almost never the real problem — missing *files* is.
-- **To read the user's files** (a PDF, a repo, a CSV): **pass an absolute path as an input** and read from it directly — do NOT assume the file is in cwd. e.g. `inputs: [{ name: paper_path, required: true }]` then in the script read `"$WF_INPUT_PAPER_PATH"`.
-- **Transient / inter-step data** → write under `WF_RUN_DIR` (gone after the run; perfect for passing between steps).
-- **Persistent things** (a venv, a cache, an output file that accumulates across runs) → use `WF_WORKFLOW_DIR`. Build heavy environments **once, idempotently**:
+- **It persists.** Output written here (notes, reports, a `venv`, caches) survives across runs and accumulates. That's the point: same task type = one project. The workspace is **never auto-deleted** (only the last 10 run *records* per workflow are kept for history; files stay).
+- **It is NOT a sandbox.** The host env is inherited: `PATH`, system `python3`/`node`/`curl`, installed tools all work. Missing *files* — not "no environment" — is the usual problem.
+- **To read the user's files** (a PDF, a repo, a CSV): **pass an absolute path as an input** and read it directly — don't assume it's in cwd. e.g. `inputs: [{ name: paper_path, required: true }]` → `"$WF_INPUT_PAPER_PATH"`.
+- **Organize complex/repeated output in subdirs you create** — since the workspace is shared, a workflow that produces a distinct deliverable per run should make its own subdir (per topic/date/paper), e.g. `mkdir -p "$WF_RUN_DIR/$(date +%F)"`. Agents: create a sensible sub-project dir for each distinct piece of work instead of dumping everything in the root.
+- **Build heavy environments once, idempotently:**
   ```bash
   [ -d "$WF_WORKFLOW_DIR/venv" ] || python3 -m venv "$WF_WORKFLOW_DIR/venv"
   "$WF_WORKFLOW_DIR/venv/bin/pip" install -q -r requirements.txt
   ```
-  Don't reinstall environments every run. (caveat: two concurrent runs of the same workflow share `WF_WORKFLOW_DIR` — avoid clobbering the same file.)
+- **Concurrency:** the same workspace can't run twice at once — a second concurrent run of the same workflow (or any run pointing at the same custom dir) is rejected, so steps never clobber each other mid-run.
 
 ## Agent steps = three layers (don't conflate)
 
@@ -177,15 +179,16 @@ semaclaw workflow run market-research -i topic=本地大模型 -i depth=deep
 semaclaw workflow run market-research -i topic=X --json    # 完整 run 记录 JSON
 ```
 
-`run` 跑通后会打印每个 step 的状态、result 预览、observe，并在 `~/semaclaw/workflow-runs/<runId>/` 留下该次 run 的 workspace（runId = `<workflow 名>-<NNNN>`，按 workflow 单调编号）。
+`run` 跑通后会打印每个 step 的状态、result 预览、observe。runId = `<workflow 名>-<NNNN>`（按 workflow 单调编号）。
 
-**历史保留**：每个 workflow 各留最近 **10 条** run，超出的最旧 run 连同其 workspace 目录一起清掉；没写任何文件的 run 结束后不留空目录。需要跨 run 保留的产物请写到 `WF_WORKFLOW_DIR`（持久），别依赖 `WF_RUN_DIR`（每 run 全新、会被回收）。
+**workspace 与历史**：每个 workflow 共用**一个持久 workspace**（默认 `~/semaclaw/workflow-data/<name>/`,可用 `workspace` 字段或 dock 里在 run 前自定义),所有 step 在此运行、产物跨 run 累积、**不会被自动删除**。`workflow-runs.json` 只保留每 workflow 最近 **10 条 run 记录**(供历史/状态查看),淘汰旧记录不影响 workspace 里的文件。
 
 ## Constraints & gotchas
 
 - **agent step 的 `persona` 必须已存在**于 `~/semaclaw/virtual-agents/`，否则该 step 直接 failed。先确认/创建 persona。
 - **`dependsOn` 只能引用已存在的 step id，且不能成环**（校验不过会被跳过加载）；引用某 step 的 result 会自动并入它的 dependsOn，引用不存在的 step 会报错。
 - **script 只做确定性活**（取数/转换/文件/调外部 API）；不要在 script 里偷偷起 agent——要 agent 就用 agent step（否则不计入并发、UI 看不到）。
+- **script step 用 POSIX shell（bash/sh）语法**（`$VAR`、`>>`、`[ -d … ]` 等）。macOS/Linux 走 `/bin/sh`。**Windows** 自动优先用 Git Bash（装了 Git 即有）跑这些脚本；没有则回退 `cmd.exe`（POSIX 语法会失败）。可用环境变量 `SEMACLAW_WORKFLOW_SHELL` 指向任意 POSIX shell 覆盖。**纯 agent 的 workflow 无此限制。**
 - **失败会级联**：某 step 失败 → 依赖它的下游被跳过 → 整个 run 标 `partial-failed`。
 - 静态 fan-out（固定 N 个）现已支持；**动态 fan-out**（数量由上游产出决定）、审批闸、条件分支尚未支持。
 - 改了定义文件即时生效（registry 热重载），不用重启。

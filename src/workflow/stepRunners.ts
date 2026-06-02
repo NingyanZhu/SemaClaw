@@ -31,21 +31,69 @@ interface ShellOpts {
   maxBuffer: number;
 }
 
+interface ShellSpec {
+  /** 解释器可执行路径（'' = 用 cmd.exe via shell:true 跑原始命令） */
+  file: string;
+  /** 由命令拼出 argv（'' file 时不用） */
+  args: (cmd: string) => string[];
+  /** 用 spawn 的 shell:true（仅 Windows 无 bash 的 cmd 回退） */
+  useShellOpt: boolean;
+  /** 独立进程组(detached)→ 支持 process.kill(-pid) 整组杀；仅 POSIX */
+  detached: boolean;
+}
+
+let cachedShell: ShellSpec | undefined;
+
+function safeExists(p: string): boolean {
+  try { return fs.existsSync(p); } catch { return false; }
+}
+
+/**
+ * 解析跑 script 用的 shell（结果缓存，避免每 step 探测）：
+ *   - 自定义：SEMACLAW_WORKFLOW_SHELL 指向某个 POSIX shell（任意平台均生效）
+ *   - POSIX：/bin/sh，detached 成独立进程组
+ *   - Windows：优先 Git Bash（让 workflow 的 POSIX 脚本照常跑），找不到才回退 cmd.exe
+ *     （cmd 下 bash 语法/`$VAR` 会失败——见 skill；建议装 Git Bash 或设 SEMACLAW_WORKFLOW_SHELL）
+ */
+function resolveShell(): ShellSpec {
+  if (cachedShell) return cachedShell;
+  const isWin = process.platform === 'win32';
+  const mkPosix = (file: string): ShellSpec => ({ file, args: (c) => ['-c', c], useShellOpt: false, detached: !isWin });
+
+  const override = process.env.SEMACLAW_WORKFLOW_SHELL;
+  if (override && safeExists(override)) { cachedShell = mkPosix(override); return cachedShell; }
+
+  if (!isWin) { cachedShell = mkPosix('/bin/sh'); return cachedShell; }
+
+  for (const b of [
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+    'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+  ].filter((x): x is string => !!x)) {
+    if (safeExists(b)) { cachedShell = mkPosix(b); return cachedShell; }   // mkPosix → detached:false on win
+  }
+
+  // 没 bash：回退 cmd.exe（POSIX 脚本会失败，见 skill）
+  cachedShell = { file: '', args: (c) => [c], useShellOpt: true, detached: false };
+  return cachedShell;
+}
+
 /**
  * 跑一条 shell 命令并捕获 stdout。
  *
- * 关键：用 `spawn('/bin/sh', ['-c', cmd], { detached: true })` 让脚本成为**独立进程组**
- * 的 leader（exec 不会真正建组——实测 process.kill(-pid) 报 ESRCH，只杀得掉 sh，孙子
- * 进程仍持有 stdout pipe，要等它自己跑完）。取消/超时/超 buffer 时 `process.kill(-pid)`
- * SIGKILL 整组，连 sleep / 子命令一起杀，绝不留还在写 WF_RUN_DIR 的孤儿。
- * Windows 无进程组语义 → 退化为 shell + child.kill()。
+ * POSIX：`spawn('/bin/sh', ['-c', cmd], { detached: true })` 让脚本成为**独立进程组**的
+ * leader（exec 不会真正建组——实测 process.kill(-pid) 报 ESRCH，只杀得掉 sh，孙子进程仍
+ * 持有 stdout pipe）。取消/超时/超 buffer 时 `process.kill(-pid)` SIGKILL 整组，连子命令一起
+ * 杀，绝不留还在写 WF_RUN_DIR 的孤儿。
+ * Windows：优先 Git Bash 跑 POSIX 脚本（见 resolveShell），无进程组 → child.kill() 杀外层。
  */
 function runShell(command: string, opts: ShellOpts, signal?: AbortSignal): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const isWin = process.platform === 'win32';
-    const child = isWin
+    const sh = resolveShell();
+    const child = sh.useShellOpt
       ? spawn(command, { shell: true, cwd: opts.cwd, env: opts.env })
-      : spawn('/bin/sh', ['-c', command], { detached: true, cwd: opts.cwd, env: opts.env });
+      : spawn(sh.file, sh.args(command), { detached: sh.detached, cwd: opts.cwd, env: opts.env });
 
     let stdout = '';
     let stderr = '';
@@ -57,8 +105,8 @@ function runShell(command: string, opts: ShellOpts, signal?: AbortSignal): Promi
       const pid = child.pid;
       if (pid === undefined) return;
       try {
-        if (!isWin) process.kill(-pid, 'SIGKILL');
-        else child.kill();
+        if (sh.detached) process.kill(-pid, 'SIGKILL'); // 整组（POSIX）
+        else child.kill();                              // 单进程（Windows）
       } catch {
         try { child.kill('SIGKILL'); } catch { /* already gone */ }
       }
