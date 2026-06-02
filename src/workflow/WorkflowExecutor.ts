@@ -40,6 +40,8 @@ const TERMINAL: ReadonlySet<StepRun['status']> = new Set(['done', 'failed', 'ski
 
 interface RunControl {
   cancelled: boolean;
+  /** abort 时立即中止在跑的 step（杀 script 子进程 / dispose agent session） */
+  abort: AbortController;
 }
 
 export class WorkflowExecutor {
@@ -85,17 +87,18 @@ export class WorkflowExecutor {
     }));
     this.emit(run);
 
-    const control: RunControl = { cancelled: false };
+    const control: RunControl = { cancelled: false, abort: new AbortController() };
     this.activeRuns.set(run.id, control);
     const done = this.execute(run, def, inputs, control);
     return { run, done };
   }
 
-  /** 最简取消：停止派发新 step + 标记，已在跑的自然跑完 */
+  /** 取消：停止派发新 step + 标记 + abort 在跑的 step（杀子进程 / dispose agent session） */
   cancel(runId: string): boolean {
     const control = this.activeRuns.get(runId);
     if (!control) return false;
     control.cancelled = true;
+    control.abort.abort();
     return true;
   }
 
@@ -173,7 +176,7 @@ export class WorkflowExecutor {
           const ctx: RenderContext = { inputs, stepResults: { ...stepResults }, runDir: run.runDir };
 
           active++;
-          this.executeStep(stepDef, def, ctx, observeDir)
+          this.executeStep(stepDef, def, ctx, observeDir, control.abort.signal)
             .then((res) => {
               this.applyResult(sr, stepDef.observe, res, run.runDir);
               if (sr.status === 'done') stepResults[sr.id] = sr.result;
@@ -206,6 +209,7 @@ export class WorkflowExecutor {
     def: WorkflowDef,
     ctx: RenderContext,
     observeDir: string,
+    signal: AbortSignal,
   ): Promise<StepRunResult> {
     if (stepDef.kind === 'agent') {
       if (!stepDef.persona) {
@@ -217,6 +221,7 @@ export class WorkflowExecutor {
       }
       return runAgentStep(stepDef, persona, def, ctx, {
         skillsExtraDirs: buildSkillsExtraDirs(ctx.runDir),
+        signal,
       });
     }
     // script：注入持久目录 WF_WORKFLOW_DIR（按 workflow 名，跨 run 保留），懒创建
@@ -225,7 +230,7 @@ export class WorkflowExecutor {
       workflowDir = path.join(this.workflowDataDir, sanitizeName(def.name));
       try { fs.mkdirSync(workflowDir, { recursive: true }); } catch { /* ignore */ }
     }
-    return runScriptStep(stepDef, def, ctx, observeDir, workflowDir);
+    return runScriptStep(stepDef, def, ctx, observeDir, workflowDir, signal);
   }
 
   private applyResult(
@@ -234,6 +239,13 @@ export class WorkflowExecutor {
     res: StepRunResult,
     runDir: string,
   ): void {
+    // 被取消中止的 step：记为 skipped（其产出无效，不进 stepResults），与 cancel 级联一致
+    if (res.aborted) {
+      sr.status = 'skipped';
+      sr.error = res.error;
+      sr.completedAt = now();
+      return;
+    }
     sr.result = res.result;
     sr.error = res.error;
     sr.guidanceSnapshot = res.guidanceSnapshot;

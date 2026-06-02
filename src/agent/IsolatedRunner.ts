@@ -57,6 +57,8 @@ export interface OneShotOptions {
   onMessage?: (data: MessageCompleteData) => void;
   /** 监听 state:update */
   onState?: (data: StateUpdateData) => void;
+  /** 中止信号：abort 时立即 dispose 并以 aborted=true 结束（用于 workflow 取消） */
+  abortSignal?: AbortSignal;
 }
 
 export interface OneShotResult {
@@ -70,6 +72,8 @@ export interface OneShotResult {
   turnCount: number;
   /** 是否因超时结束 */
   timedOut: boolean;
+  /** 是否因 abortSignal 中止结束 */
+  aborted: boolean;
 }
 
 /**
@@ -115,15 +119,18 @@ export async function runOneShot(opts: OneShotOptions): Promise<OneShotResult> {
   const allTexts: string[] = [];
   let turnCount = 0;
   let timedOut = false;
+  let aborted = false;
 
   return new Promise<OneShotResult>((resolve) => {
     let done = false;
 
-    const finish = (reason: 'idle' | 'timeout') => {
+    const finish = (reason: 'idle' | 'timeout' | 'aborted') => {
       if (done) return;
       done = true;
       if (reason === 'timeout') timedOut = true;
+      if (reason === 'aborted') aborted = true;
       clearTimeout(timer);
+      opts.abortSignal?.removeEventListener('abort', onAbort);
       core.off('message:complete', onMessageComplete);
       core.off('state:update', onStateUpdate);
       // dispose 是异步的，我们不等它完成 — 失败也只是泄漏一次性资源
@@ -134,8 +141,11 @@ export async function runOneShot(opts: OneShotOptions): Promise<OneShotResult> {
         durationMs: Date.now() - startedAt,
         turnCount,
         timedOut,
+        aborted,
       });
     };
+
+    const onAbort = () => finish('aborted');
 
     const timer = setTimeout(() => finish('timeout'), timeoutMs);
 
@@ -153,6 +163,11 @@ export async function runOneShot(opts: OneShotOptions): Promise<OneShotResult> {
 
     core.on<MessageCompleteData>('message:complete', onMessageComplete);
     core.on<StateUpdateData>('state:update', onStateUpdate);
+
+    // 已取消则不启动；否则挂取消监听
+    if (opts.abortSignal?.aborted) { finish('aborted'); return; }
+    opts.abortSignal?.addEventListener('abort', onAbort, { once: true });
+
     core.processUserInput(opts.prompt);
   });
 }
