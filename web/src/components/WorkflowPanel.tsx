@@ -190,27 +190,28 @@ export function WorkflowPanel(p: Props) {
           </div>
         )}
 
-        {/* ── History ── */}
-        {p.runs.length > 0 && (
-          <div className="p-3">
-            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">History</div>
-            <div className="flex flex-col gap-0.5">
-              {p.runs.slice(0, 30).map(r => (
-                <button key={r.id} onClick={() => { setSelectedRunId(r.id); setSelectedStepId(null); }}
-                  className={`flex items-center justify-between text-[11px] px-2 py-1 rounded hover:bg-gray-100 ${
-                    currentRun?.id === r.id ? 'bg-gray-100' : ''
-                  }`}>
-                  <span className="truncate text-gray-600">{r.workflowName}</span>
-                  <span className="flex items-center gap-1.5 flex-shrink-0">
-                    <span className={`px-1 rounded ${RUN_PILL[r.status]}`}>{r.status}</span>
-                    <span className="text-gray-300">{new Date(r.createdAt).toLocaleTimeString()}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* ── History（固定底部，约 3 行高，超出可滚动） ── */}
+      {p.runs.length > 0 && (
+        <div className="flex-shrink-0 border-t border-gray-200 bg-white px-3 py-2">
+          <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">History</div>
+          <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '4.75rem' }}>
+            {p.runs.slice(0, 30).map(r => (
+              <button key={r.id} onClick={() => { setSelectedRunId(r.id); setSelectedStepId(null); }}
+                className={`flex items-center justify-between text-[11px] px-2 py-1 rounded hover:bg-gray-100 ${
+                  currentRun?.id === r.id ? 'bg-gray-100' : ''
+                }`}>
+                <span className="truncate text-gray-600">{r.workflowName}</span>
+                <span className="flex items-center gap-1.5 flex-shrink-0">
+                  <span className={`px-1 rounded ${RUN_PILL[r.status]}`}>{r.status}</span>
+                  <span className="text-gray-300">{new Date(r.createdAt).toLocaleTimeString()}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
