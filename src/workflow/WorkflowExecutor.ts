@@ -13,6 +13,7 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import type { PersonaConfig } from '../agent/PersonaRegistry';
 import type {
@@ -32,7 +33,7 @@ export interface WorkflowExecutorOpts {
   concurrency?: number;
   /** 每次状态变化回调（持久化之后），daemon 用来推 WS */
   onUpdate?: (run: WorkflowRun) => void;
-  /** workflow 持久目录根（每 workflow 一个子目录 → WF_WORKFLOW_DIR）；不传则不注入该变量 */
+  /** 默认 workspace 根：未自定义的 workflow 用 <root>/<sanitized-name>/ 作 workspace */
   workflowDataDir?: string;
 }
 
@@ -52,6 +53,8 @@ export class WorkflowExecutor {
   private readonly workflowDataDir?: string;
   /** 在跑的 run：runId → control，供 cancel 用 */
   private readonly activeRuns = new Map<string, RunControl>();
+  /** 在跑的 run 占用的 workspace 目录（防止同目录并发 run 互相踩） */
+  private readonly activeWorkspaces = new Set<string>();
 
   constructor(opts: WorkflowExecutorOpts) {
     this.store = opts.store;
@@ -76,7 +79,12 @@ export class WorkflowExecutor {
     trigger?: string,
   ): { run: WorkflowRun; done: Promise<WorkflowRun> } {
     const inputs = this.resolveInputs(def, provided);
-    const run = this.store.newRun(def.name, inputs, trigger);
+    const workspace = this.resolveWorkspace(def);
+    // 同一 workspace 不允许并发 run（共享持久目录，会互相踩）
+    if (this.activeWorkspaces.has(workspace)) {
+      throw new Error(`a run is already in progress for this workspace (${workspace})`);
+    }
+    const run = this.store.newRun(def.name, inputs, workspace, trigger);
     run.steps = def.steps.map<StepRun>(s => ({
       id: s.id,
       kind: s.kind,
@@ -89,6 +97,7 @@ export class WorkflowExecutor {
 
     const control: RunControl = { cancelled: false, abort: new AbortController() };
     this.activeRuns.set(run.id, control);
+    this.activeWorkspaces.add(workspace);
     const done = this.execute(run, def, inputs, control);
     return { run, done };
   }
@@ -146,9 +155,7 @@ export class WorkflowExecutor {
         }
         run.completedAt = now();
         this.activeRuns.delete(run.id);
-        // 没写任何文件的 run（纯 agent 推理 / echo 类）不留空目录；取消的 run 可能还有在跑的
-        // step 在写盘，跳过清理以免拔掉它脚下的 cwd。
-        if (!control.cancelled) cleanupEmptyRunDir(run.runDir);
+        this.activeWorkspaces.delete(run.runDir);
         this.emit(run);
         resolve(run);
       };
@@ -224,13 +231,22 @@ export class WorkflowExecutor {
         signal,
       });
     }
-    // script：注入持久目录 WF_WORKFLOW_DIR（按 workflow 名，跨 run 保留），懒创建
-    let workflowDir: string | undefined;
-    if (this.workflowDataDir) {
-      workflowDir = path.join(this.workflowDataDir, sanitizeName(def.name));
-      try { fs.mkdirSync(workflowDir, { recursive: true }); } catch { /* ignore */ }
-    }
-    return runScriptStep(stepDef, def, ctx, observeDir, workflowDir, signal);
+    // workspace 即持久目录：WF_RUN_DIR 与 WF_WORKFLOW_DIR 同为 ctx.runDir
+    return runScriptStep(stepDef, def, ctx, observeDir, ctx.runDir, signal);
+  }
+
+  /**
+   * 解析 workflow 的 workspace 目录（所有 step 的 cwd，跨 run 持久共享）：
+   *   - def.workspace 为空 → <workflowDataDir>/<sanitized-name>/（默认）
+   *   - 以 ~ 开头 → 展开到 home
+   *   - 绝对路径 → 原样；相对路径 → 挂到默认根下
+   */
+  private resolveWorkspace(def: WorkflowDef): string {
+    const root = this.workflowDataDir ?? path.join(os.homedir(), '.semaclaw-workflow-data');
+    const custom = def.workspace?.trim();
+    if (!custom) return path.join(root, sanitizeName(def.name));
+    const expanded = custom.startsWith('~') ? path.join(os.homedir(), custom.slice(1)) : custom;
+    return path.isAbsolute(expanded) ? expanded : path.join(root, expanded);
   }
 
   private applyResult(
@@ -294,21 +310,6 @@ function captureObserve(spec: ObserveSpec, result: string, runDir: string): Obse
 
 function now(): string {
   return new Date().toISOString();
-}
-
-/** run 结束后若 workspace 实质为空（无文件，.observe 也空）则删掉，避免堆一堆空目录 */
-function cleanupEmptyRunDir(runDir: string): void {
-  try {
-    const entries = fs.readdirSync(runDir);
-    const empty =
-      entries.length === 0 ||
-      (entries.length === 1 &&
-        entries[0] === '.observe' &&
-        fs.readdirSync(path.join(runDir, '.observe')).length === 0);
-    if (empty) fs.rmSync(runDir, { recursive: true, force: true });
-  } catch {
-    /* best-effort */
-  }
 }
 
 /** workflow 名 → 安全目录名 */

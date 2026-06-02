@@ -959,11 +959,12 @@ export class WebSocketGateway {
         const stepId = msg.stepId !== undefined && msg.stepId !== null ? String(msg.stepId) : undefined;
         const guidance = msg.guidance !== undefined && msg.guidance !== null ? String(msg.guidance) : undefined;
         const timeout = typeof msg.timeout === 'number' ? msg.timeout : undefined;
+        const workspace = msg.workspace !== undefined && msg.workspace !== null ? String(msg.workspace) : undefined;
         if (!name || !this.workflowService) {
           this.send(client, { type: 'workflow:edit:response', requestId, error: 'name required / service not ready' });
           return;
         }
-        const res = this.workflowService.editStep(name, { stepId, guidance, timeout });
+        const res = this.workflowService.editStep(name, { stepId, guidance, timeout, workspace });
         this.send(client, 'error' in res
           ? { type: 'workflow:edit:response', requestId, error: res.error }
           : { type: 'workflow:edit:response', requestId, ok: true });

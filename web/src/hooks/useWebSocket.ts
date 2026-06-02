@@ -82,7 +82,7 @@ export interface WsHook {
   /** 取消一次 run */
   workflowCancel: (runId: string) => void;
   /** 无损编辑定义（workflow.guidance / step.guidance / step.timeout），写回 .md */
-  workflowEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number }) => void;
+  workflowEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number; workspace?: string }) => void;
   /** 主动刷新 defs + runs */
   workflowRefresh: () => void;
 }
@@ -156,7 +156,7 @@ export function useWebSocket(): WsHook {
     rawSend({ type: 'workflow:cancel', runId });
   }, [rawSend]);
 
-  const workflowEdit = useCallback((name: string, patch: { stepId?: string; guidance?: string; timeout?: number }) => {
+  const workflowEdit = useCallback((name: string, patch: { stepId?: string; guidance?: string; timeout?: number; workspace?: string }) => {
     setWorkflowError(null);
     rawSend({ type: 'workflow:edit', requestId: `wfe-${Date.now()}`, name, ...patch });
   }, [rawSend]);

@@ -12,12 +12,14 @@ import * as fs from 'fs';
 import { parseDocument, Scalar, type YAMLMap, type YAMLSeq } from 'yaml';
 
 export interface EditPatch {
-  /** 不传 = 编辑 workflow 级 guidance；传 = 编辑该 step */
+  /** 不传 = 编辑 workflow 级字段（guidance/workspace）；传 = 编辑该 step */
   stepId?: string;
   /** 新 guidance（'' 或仅空白 = 删除该字段） */
   guidance?: string;
   /** 新 timeout 秒（仅 step 级有效；undefined = 不动） */
   timeout?: number;
+  /** 新 workspace 路径（仅 workflow 级；'' 或仅空白 = 删除该字段 → 回退默认目录） */
+  workspace?: string;
 }
 
 /** 就地编辑文件。成功返回 true，失败抛错。 */
@@ -39,8 +41,9 @@ export function editWorkflowFile(filePath: string, patch: EditPatch): void {
   const doc = parseDocument(fmText);
 
   if (patch.stepId === undefined) {
-    // workflow 级 guidance
-    applyGuidance(doc as unknown as YAMLMap, 'guidance', patch.guidance);
+    // workflow 级字段
+    applyScalarField(doc as unknown as YAMLMap, 'guidance', patch.guidance);
+    applyScalarField(doc as unknown as YAMLMap, 'workspace', patch.workspace);
   } else {
     const steps = doc.get('steps') as YAMLSeq | undefined;
     if (!steps || !Array.isArray(steps.items)) throw new Error('no steps in definition');
@@ -48,7 +51,7 @@ export function editWorkflowFile(filePath: string, patch: EditPatch): void {
       (it): it is YAMLMap => isMap(it) && it.get('id') === patch.stepId,
     );
     if (!stepMap) throw new Error(`step "${patch.stepId}" not found`);
-    if (patch.guidance !== undefined) applyGuidance(stepMap, 'guidance', patch.guidance);
+    if (patch.guidance !== undefined) applyScalarField(stepMap, 'guidance', patch.guidance);
     if (patch.timeout !== undefined) {
       if (!Number.isFinite(patch.timeout) || patch.timeout <= 0) throw new Error('timeout must be a positive number');
       stepMap.set('timeout', Math.floor(patch.timeout));
@@ -68,8 +71,8 @@ export function editWorkflowFile(filePath: string, patch: EditPatch): void {
   fs.renameSync(tmp, filePath);
 }
 
-/** 设/删 guidance：多行用块字面量(|)更易读；空白则删除该键 */
-function applyGuidance(map: YAMLMap, key: string, value: string | undefined): void {
+/** 设/删一个标量字段：多行用块字面量(|)更易读；空白则删除该键；undefined = 不动 */
+function applyScalarField(map: YAMLMap, key: string, value: string | undefined): void {
   if (value === undefined) return;
   if (value.trim() === '') {
     map.delete(key);

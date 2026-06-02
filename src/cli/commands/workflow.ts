@@ -50,7 +50,7 @@ export async function cmdWorkflowRun(
   const inputs = parseInputs(opts.input ?? []);
 
   const personaRegistry = new PersonaRegistry(config.paths.virtualAgentsDir);
-  const store = new WorkflowRunStore(config.paths.workflowStatePath, config.paths.workflowRunsDir);
+  const store = new WorkflowRunStore(config.paths.workflowStatePath);
   const executor = new WorkflowExecutor({
     store,
     getPersona: (n) => personaRegistry.get(n),

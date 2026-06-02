@@ -10,7 +10,7 @@ interface Props {
   error: string | null;
   onRun: (name: string, inputs: Record<string, string>) => void;
   onCancel: (runId: string) => void;
-  onEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number }) => void;
+  onEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number; workspace?: string }) => void;
 }
 
 type DefStep = WorkflowDefSummary['steps'][number];
@@ -110,6 +110,7 @@ export function WorkflowPanel(p: Props) {
               </select>
               {def?.description && <p className="text-[11px] text-gray-400 mb-2">{def.description}</p>}
               {def && <WorkflowGuidanceEditor defName={def.name} guidance={def.guidance} onEdit={p.onEdit} />}
+              {def && <WorkflowWorkspaceEditor defName={def.name} workspace={def.workspace} onEdit={p.onEdit} />}
               {def?.inputs.map(i => (
                 <label key={i.name} className="block mb-2">
                   <span className="text-[11px] text-gray-500">{i.name}{i.required && <span className="text-red-400"> *</span>}</span>
@@ -223,7 +224,7 @@ const SAVE_BTN = (dirty: boolean) =>
 function StepEditor({ defName, step, onEdit }: {
   defName: string;
   step: DefStep;
-  onEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number }) => void;
+  onEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number; workspace?: string }) => void;
 }) {
   const [g, setG] = useState(step.guidance ?? '');
   const [t, setT] = useState(step.timeout != null ? String(step.timeout) : '');
@@ -261,11 +262,33 @@ function StepEditor({ defName, step, onEdit }: {
   );
 }
 
+/** 触发区的 workflow 级 workspace 目录编辑器（空 = 默认 <dataDir>/<name>/） */
+function WorkflowWorkspaceEditor({ defName, workspace, onEdit }: {
+  defName: string;
+  workspace?: string;
+  onEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number; workspace?: string }) => void;
+}) {
+  const [w, setW] = useState(workspace ?? '');
+  useEffect(() => { setW(workspace ?? ''); }, [defName, workspace]);
+  const dirty = w !== (workspace ?? '');
+  return (
+    <details className="mb-2">
+      <summary className="text-[10px] text-gray-400 uppercase tracking-wide cursor-pointer">
+        workspace dir {workspace ? `· ${workspace}` : '· (default)'}
+      </summary>
+      <input value={w} onChange={e => setW(e.target.value)}
+        placeholder="留空=默认 workflow-data/<name>/；可填绝对路径或 ~/…"
+        className="w-full text-xs border border-gray-200 rounded px-2 py-1 bg-white font-mono mt-1" />
+      <button onClick={() => onEdit(defName, { workspace: w })} disabled={!dirty} className={`${SAVE_BTN(dirty)} mt-1`}>Save</button>
+    </details>
+  );
+}
+
 /** 触发区的 workflow 级 guidance 编辑器 */
 function WorkflowGuidanceEditor({ defName, guidance, onEdit }: {
   defName: string;
   guidance?: string;
-  onEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number }) => void;
+  onEdit: (name: string, patch: { stepId?: string; guidance?: string; timeout?: number; workspace?: string }) => void;
 }) {
   const [g, setG] = useState(guidance ?? '');
   useEffect(() => { setG(guidance ?? ''); }, [defName, guidance]);

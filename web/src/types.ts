@@ -172,6 +172,8 @@ export interface WorkflowDefSummary {
   inputs: { name: string; required?: boolean; default?: string }[];
   /** workflow 级 guidance（可编辑） */
   guidance?: string;
+  /** 自定义 workspace 目录（可编辑；空 = 默认 <dataDir>/<name>/） */
+  workspace?: string;
   /** 各 step 的 def 模板原始值（可编辑，非 run 渲染快照） */
   steps: { id: string; kind: 'agent' | 'script'; guidance?: string; timeout?: number }[];
 }

@@ -9,9 +9,9 @@
  *     （保证已完成 run 不丢）。tmp+rename 原子落盘。
  *   - 单写者 + 内存权威 → 消除并发 run 的 load-modify-write lost-update 竞态。
  *   - id = `<workflow 名>-<NNNN>`，NNNN 为该 workflow 的单调序号（max+1，抗碰撞）。
- *   - 保留策略：**每个 workflow 各留最近 PER_WORKFLOW_CAP 条**；超出的最旧 run 连同其
- *     workspace 目录一起 GC，避免 workflow-runs 子目录无限堆积。
- *   - 每 run 一个 workspace 目录：<runsDir>/<runId>/（含 .observe 子目录）。
+ *   - 保留策略：**每个 workflow 各留最近 PER_WORKFLOW_CAP 条历史记录**；超出丢最旧记录。
+ *   - workspace 不再每 run 一个，而是**每 workflow 一个持久共享目录**（run+data 合体），
+ *     由调用方解析后传入 newRun；故 store 不再创建/删除 workspace 目录。
  */
 
 import * as fs from 'fs';
@@ -35,7 +35,6 @@ export class WorkflowRunStore {
 
   constructor(
     private readonly statePath: string,
-    private readonly runsDir: string,
     perWorkflowCap = PER_WORKFLOW_CAP,
   ) {
     this.perWorkflowCap = perWorkflowCap;
@@ -43,17 +42,20 @@ export class WorkflowRunStore {
     for (const r of this.runs) this.byId.set(r.id, r);
   }
 
-  /** 创建一次新 run（分配 id + 建 workspace 目录），状态 running、steps 空，未持久化 */
-  newRun(workflowName: string, inputs: Record<string, string>, trigger?: string): WorkflowRun {
+  /**
+   * 创建一次新 run（分配 id），状态 running、steps 空，未持久化。
+   * workspaceDir 由调用方解析（默认 <dataDir>/<name>/ 或用户自定义），跨 run 持久共享；
+   * 此处确保它和其 .observe 子目录存在。
+   */
+  newRun(workflowName: string, inputs: Record<string, string>, workspaceDir: string, trigger?: string): WorkflowRun {
     const id = this.allocateId(workflowName);
-    const runDir = path.join(this.runsDir, id);
-    fs.mkdirSync(path.join(runDir, '.observe'), { recursive: true });
+    fs.mkdirSync(path.join(workspaceDir, '.observe'), { recursive: true });
     return {
       id,
       workflowName,
       inputs,
       status: 'running',
-      runDir,
+      runDir: workspaceDir,
       steps: [],
       trigger,
       createdAt: new Date().toISOString(),
@@ -147,7 +149,10 @@ export class WorkflowRunStore {
     return `${prefix}${String(next).padStart(4, '0')}`;
   }
 
-  /** 把某 workflow 的历史 run 截到最近 perWorkflowCap 条，超出的最旧 run + 其目录一起 GC */
+  /**
+   * 把某 workflow 的历史 run 记录截到最近 perWorkflowCap 条（只丢记录，不动 workspace
+   * 目录——它现在是跨 run 共享的持久目录，归用户所有）。
+   */
   private enforceCap(workflowName: string): void {
     let kept = 0;
     for (let i = 0; i < this.runs.length; ) {
@@ -157,19 +162,11 @@ export class WorkflowRunStore {
       if (kept > this.perWorkflowCap) {
         this.runs.splice(i, 1);
         if (this.byId.get(r.id) === r) this.byId.delete(r.id);
-        this.removeRunDir(r);
         // 不自增 i：splice 后当前位是下一条
       } else {
         i++;
       }
     }
-  }
-
-  /** 删除一个 run 的 workspace 目录（仅限确实在 runsDir 下的，best-effort 异步） */
-  private removeRunDir(run: WorkflowRun): void {
-    const dir = run.runDir;
-    if (!dir || !dir.startsWith(this.runsDir)) return;
-    fs.rm(dir, { recursive: true, force: true }, () => { /* best-effort */ });
   }
 
   private scheduleFlush(): void {

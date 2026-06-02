@@ -145,6 +145,7 @@ function normalizeAndValidate(fm: Record<string, unknown>, filePath: string): Wo
     version: str(fm.version),
     inputs: normalizeInputs(fm.inputs),
     guidance,
+    workspace: str(fm.workspace),
     steps,
     filePath,
     source: 'user',

@@ -25,6 +25,8 @@ export interface WorkflowDefSummary {
   inputs: { name: string; required?: boolean; default?: string }[];
   /** workflow 级 guidance（dock 可编辑） */
   guidance?: string;
+  /** 自定义 workspace 目录（dock 可编辑；空 = 默认 <dataDir>/<name>/） */
+  workspace?: string;
   /** 各 step 的可编辑原始字段（注意：是 def 模板值，非 run 的渲染快照） */
   steps: { id: string; kind: 'agent' | 'script'; guidance?: string; timeout?: number }[];
 }
@@ -32,7 +34,6 @@ export interface WorkflowDefSummary {
 export interface WorkflowServiceOpts {
   workflowsDir: string;
   workflowStatePath: string;
-  workflowRunsDir: string;
   workflowDataDir?: string;
   getPersona: (name: string) => PersonaConfig | null;
   concurrency?: number;
@@ -46,7 +47,7 @@ export class WorkflowService {
 
   constructor(opts: WorkflowServiceOpts) {
     this.registry = new WorkflowRegistry(opts.workflowsDir);
-    this.store = new WorkflowRunStore(opts.workflowStatePath, opts.workflowRunsDir);
+    this.store = new WorkflowRunStore(opts.workflowStatePath);
     // 启动对账：上次进程留下的 running 孤儿 run（重启后绝不会再推进）标 interrupted
     const orphaned = this.store.reconcileOrphans();
     if (orphaned > 0) {
@@ -74,6 +75,7 @@ export class WorkflowService {
       stepCount: d.steps.length,
       inputs: (d.inputs ?? []).map(i => ({ name: i.name, required: i.required, default: i.default })),
       guidance: d.guidance,
+      workspace: d.workspace,
       steps: d.steps.map(s => ({ id: s.id, kind: s.kind, guidance: s.guidance, timeout: s.timeout })),
     }));
   }

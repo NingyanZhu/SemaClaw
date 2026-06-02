@@ -68,6 +68,11 @@ export interface WorkflowDef {
   inputs?: WorkflowInput[];
   /** workflow 级规则/约束，应用到所有 agent step（与 step.guidance 拼接） */
   guidance?: string;
+  /**
+   * 自定义 workspace 目录（所有 step 的 cwd，跨 run 持久共享）。
+   * 空 = 默认 <workflowDataDir>/<sanitized-name>/。绝对路径或 ~ 直接用；相对路径挂在默认根下。
+   */
+  workspace?: string;
   steps: WorkflowStep[];
   /** 定义文件绝对路径 */
   filePath: string;

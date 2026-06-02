@@ -430,7 +430,6 @@ async function main(): Promise<void> {
   const workflowService = new WorkflowService({
     workflowsDir: config.paths.workflowsDir,
     workflowStatePath: config.paths.workflowStatePath,
-    workflowRunsDir: config.paths.workflowRunsDir,
     workflowDataDir: config.paths.workflowDataDir,
     getPersona: (n) => personaRegistry.get(n),
   });

@@ -177,14 +177,9 @@ export const config = {
       envOptional('SEMACLAW_WORKFLOW_STATE_PATH', path.join(semaclawConfigHome, 'workflow-runs.json'))
     ),
     /**
-     * ${home}/workflow-runs/<runId>/ — 每次 workflow run 的共享 workspace 目录（每 run 全新，临时）
-     */
-    workflowRunsDir: path.resolve(
-      envOptional('SEMACLAW_WORKFLOW_RUNS_DIR', path.join(semaclawHome, 'workflow-runs'))
-    ),
-    /**
-     * ${home}/workflow-data/<name>/ — 每个 workflow 的持久目录（跨 run 保留：venv/缓存/累积输出）
-     * → script step 通过 WF_WORKFLOW_DIR 访问
+     * ${home}/workflow-data/<name>/ — 每个 workflow 的持久共享 workspace（run+data 合体，
+     * 所有 step 的 cwd，跨 run 保留；可在定义里用 workspace 字段自定义）
+     * → 所有 step 通过 WF_RUN_DIR / WF_WORKFLOW_DIR（同一目录）访问
      */
     workflowDataDir: path.resolve(
       envOptional('SEMACLAW_WORKFLOW_DATA_DIR', path.join(semaclawHome, 'workflow-data'))
