@@ -12,7 +12,7 @@
  *   - skip*Permission: true（独立任务无人值守）
  */
 import { SemaCore } from 'sema-core';
-import type { MessageCompleteData, StateUpdateData } from 'sema-core/event';
+import type { MessageCompleteData, StateUpdateData, SessionErrorData } from 'sema-core/event';
 import type { SemaCoreConfig } from 'sema-core/types';
 import type { MCPServerConfig, MCPScopeType } from 'sema-core/mcp';
 
@@ -74,6 +74,10 @@ export interface OneShotResult {
   timedOut: boolean;
   /** 是否因 abortSignal 中止结束 */
   aborted: boolean;
+  /** 是否因 session:error 快速失败结束 */
+  errored: boolean;
+  /** errored 时的错误描述（`<type>: <message>`） */
+  errorMessage?: string;
 }
 
 /**
@@ -120,19 +124,26 @@ export async function runOneShot(opts: OneShotOptions): Promise<OneShotResult> {
   let turnCount = 0;
   let timedOut = false;
   let aborted = false;
+  let errored = false;
+  let errorMessage: string | undefined;
 
   return new Promise<OneShotResult>((resolve) => {
     let done = false;
+    // 只有在观察到至少一次 processing 之后才接受 idle —— 防止 prompt 真正开跑前的
+    // 早期 idle（plugin/session 初始化遗留）让我们带空 text 提前 resolve。
+    let sawProcessing = false;
 
-    const finish = (reason: 'idle' | 'timeout' | 'aborted') => {
+    const finish = (reason: 'idle' | 'timeout' | 'aborted' | 'error') => {
       if (done) return;
       done = true;
       if (reason === 'timeout') timedOut = true;
       if (reason === 'aborted') aborted = true;
+      if (reason === 'error') errored = true;
       clearTimeout(timer);
       opts.abortSignal?.removeEventListener('abort', onAbort);
       core.off('message:complete', onMessageComplete);
       core.off('state:update', onStateUpdate);
+      core.off('session:error', onSessionError);
       // dispose 是异步的，我们不等它完成 — 失败也只是泄漏一次性资源
       (core as { dispose?: () => Promise<void> }).dispose?.().catch(() => {});
       resolve({
@@ -142,6 +153,8 @@ export async function runOneShot(opts: OneShotOptions): Promise<OneShotResult> {
         turnCount,
         timedOut,
         aborted,
+        errored,
+        errorMessage,
       });
     };
 
@@ -158,11 +171,20 @@ export async function runOneShot(opts: OneShotOptions): Promise<OneShotResult> {
 
     const onStateUpdate = (data: StateUpdateData) => {
       opts.onState?.(data);
-      if (data.state === 'idle') finish('idle');
+      if (data.state === 'processing') sawProcessing = true;
+      else if (data.state === 'idle' && sawProcessing) finish('idle');
+    };
+
+    // session:error 是已浮现的会话错误（api/fatal/context/model）——快速失败，
+    // 不再干等到 timeout（工具错误 tool:execution:error 是可恢复的，不在此列）。
+    const onSessionError = (data: SessionErrorData) => {
+      errorMessage = `${data.type}: ${data.error?.message ?? data.error?.code ?? 'session error'}`;
+      finish('error');
     };
 
     core.on<MessageCompleteData>('message:complete', onMessageComplete);
     core.on<StateUpdateData>('state:update', onStateUpdate);
+    core.on<SessionErrorData>('session:error', onSessionError);
 
     // 已取消则不启动；否则挂取消监听
     if (opts.abortSignal?.aborted) { finish('aborted'); return; }

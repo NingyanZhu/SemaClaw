@@ -156,11 +156,13 @@ export async function runAgentStep(
 
   return {
     result: res.text,
-    failed: res.timedOut || res.aborted,
+    failed: res.timedOut || res.aborted || res.errored,
     aborted: res.aborted,
     error: res.aborted
       ? 'cancelled'
-      : res.timedOut ? `agent step timed out after ${step.timeout ?? 600}s` : undefined,
+      : res.errored ? (res.errorMessage || 'agent session error')
+      : res.timedOut ? `agent step timed out after ${step.timeout ?? 600}s`
+      : undefined,
     guidanceSnapshot: guidance || undefined,
   };
 }
