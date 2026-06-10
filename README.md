@@ -36,6 +36,7 @@
 - **Four-layer plugin architecture** — MCP tools, subagents, skills, and hooks — each anchored to a distinct engineering concern, forming a principled extension surface.
 - **Plugin Marketplace** — Install third-party plugin bundles from any git repo or local directory. Each plugin can package skills, subagents, hooks, and MCP servers together. Plugins are default-off and per-plugin toggled from the Web UI; multiple sources can be added with priority ordering.
 - **DAG Teams** — A two-stage hybrid orchestration framework combining LLM-based dynamic task decomposition with deterministic DAG execution. Supports mixed teams of persistent and virtual agents, with 5 built-in virtual subagents ready to use out of the box.
+- **Reusable Workflows** — Codify repeatable routines as declarative DAG definitions (Markdown + YAML) that mix agent steps (isolated persona sessions) with deterministic script steps. Parameterized inputs, `{{…}}` templating with auto-inferred dependencies, a two-level `guidance` rules layer, and a persistent per-workflow workspace. Author definitions in conversation via the bundled `workflow` skill, then trigger from the CLI (`semaclaw workflow run`) or the Web UI's workflow dock — a live DAG view with run history and inline tuning. Runs only spawn isolated sessions and never touch your live chat agents.
 - **Four-mode scheduled tasks** — Pure notification, pure script, pure agent, and hybrid script-plus-agent execution — matching mode to task complexity so token consumption stays proportional to reasoning work.
 - **Agentic Wiki** — Transforms task outputs into structured, retrievable wiki entries indexed alongside agent memory, creating a compounding personal knowledge base that feeds back into future agent sessions.
 - **Workbench: HTML-as-throwaway-UI** — A built-in rendering surface for agent-emitted deliverables. The `LaunchUI` tool lets agents ship interactive HTML, rich Markdown, embedded web services (iframe), or API-endpoint cards — the Web UI workbench mounts each artifact as a switchable history tab, no separate build step. Lean into "HTML as a disposable UI": ask an agent to *show you* a result instead of just describing it.
@@ -107,6 +108,7 @@ For a complete walkthrough including environment variables, CLI usage, runtime l
 | [Quick Start & Usage Guide](docs/QUICK_START.md) | Installation, configuration, CLI commands, runtime layout, MCP tools |
 | [Plugin Marketplace Guide](docs/plugin-marketplace.md) | Add plugin sources, discover and enable bundles of skills/subagents/hooks/MCP servers |
 | [Hooks Guide](docs/hooks_guide.md) | Intercept agent lifecycle events with shell scripts or LLM-based checks |
+| [Workflow Guide](skills/workflow/SKILL.md) | Author reusable agent + script DAG workflows: definition format, templating, observe outputs |
 | [Remote Access Guide](docs/REMOTE_ACCESS.md) | Expose the Web UI securely via reverse proxy (Nginx / Caddy) |
 | [Technical Report](https://arxiv.org/abs/2604.11548) | SemaClaw: A Step Towards General-Purpose Personal AI Agents through Harness Engineering |
 | [Contributing](CONTRIBUTING.md) | *Coming soon* |
@@ -124,6 +126,7 @@ semaclaw/
 │   ├── mcp/            # MCP servers (admin, schedule, memory, dispatch, ...)
 │   ├── memory/         # FTS5 + vector hybrid search, daily logger
 │   ├── scheduler/      # Cron / interval / once scheduler
+│   ├── workflow/       # Reusable workflow engine (registry, DAG executor, run store)
 │   ├── wiki/           # Git-driven personal knowledge base
 │   ├── marketplace/    # Plugin marketplace (source management, plugin discovery, MCP/skill/subagent injection)
 │   └── clawhub/        # ClaWHub skill marketplace integration
